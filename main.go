@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -290,7 +291,8 @@ let saveTimeout = null;
 
 function updatePreview() {
     const content = editor.value;
-    fetch('/api/markdown', {
+    const url = addTokenToUrl('/api/markdown');
+    fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'text/plain'},
         body: content
@@ -308,7 +310,8 @@ function saveNote() {
     const content = editor.value;
     if (content === lastContent) return;
 
-    fetch(window.location.pathname, {
+    const url = addTokenToUrl(window.location.pathname);
+    fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'text/plain'},
         body: content
@@ -483,7 +486,8 @@ function handleFiles(files) {
 
         showStatus('上传中...', false);
 
-        fetch('/api/upload', {
+        const uploadUrl = addTokenToUrl('/api/upload');
+        fetch(uploadUrl, {
             method: 'POST',
             body: formData
         })
@@ -511,6 +515,31 @@ function handleFiles(files) {
         });
     }
     fileInput.value = '';
+}
+
+// Access token management
+const ACCESS_TOKEN_KEY = 'jot_access_token';
+let savedToken = localStorage.getItem(ACCESS_TOKEN_KEY);
+
+// Get token from URL or use saved token
+const urlParams = new URLSearchParams(window.location.search);
+const urlToken = urlParams.get('token');
+if (urlToken) {
+    // Save token from URL to localStorage
+    localStorage.setItem(ACCESS_TOKEN_KEY, urlToken);
+    savedToken = urlToken;
+    // Remove token from URL to keep it clean
+    const newUrl = window.location.pathname;
+    window.history.replaceState({}, '', newUrl);
+}
+
+// Add token to all requests
+function addTokenToUrl(url) {
+    if (savedToken) {
+        const separator = url.includes('?') ? '&' : '?';
+        return url + separator + 'token=' + encodeURIComponent(savedToken);
+    }
+    return url;
 }
 
 editor.focus();
@@ -786,6 +815,177 @@ body {
         {{end}}
     </div>
 </div>
+</body>
+</html>`
+
+const accessLoginHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>访问授权</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #ebeef1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+.login-container {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    padding: 40px;
+    width: 100%;
+    max-width: 400px;
+}
+.login-header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+.login-header h1 {
+    font-size: 24px;
+    color: #333;
+    margin-bottom: 8px;
+}
+.login-header p {
+    color: #666;
+    font-size: 14px;
+}
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.form-group label {
+    font-size: 14px;
+    color: #333;
+    font-weight: 500;
+}
+.form-group input {
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    transition: border-color 0.2s;
+}
+.form-group input:focus {
+    outline: none;
+    border-color: #0066cc;
+}
+.error-message {
+    color: #f44336;
+    font-size: 14px;
+    margin-top: -10px;
+    display: none;
+}
+.error-message.show {
+    display: block;
+}
+.login-button {
+    padding: 12px;
+    background: #0066cc;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.login-button:hover {
+    background: #0052a3;
+}
+.login-button:active {
+    background: #003d7a;
+}
+@media (prefers-color-scheme: dark) {
+    body {
+        background: #333b4d;
+    }
+    .login-container {
+        background: #24262b;
+    }
+    .login-header h1 {
+        color: #fff;
+    }
+    .login-header p {
+        color: #aaa;
+    }
+    .form-group label {
+        color: #fff;
+    }
+    .form-group input {
+        background: #1a1a1a;
+        border-color: #495265;
+        color: #fff;
+    }
+    .form-group input:focus {
+        border-color: #0066cc;
+    }
+}
+</style>
+</head>
+<body>
+<div class="login-container">
+    <div class="login-header">
+        <h1>🔐 访问授权</h1>
+        <p>请输入访问令牌以使用笔记功能</p>
+    </div>
+    <form class="login-form" id="loginForm" method="GET" action="">
+        <div class="form-group">
+            <label for="token">访问令牌</label>
+            <input type="password" id="token" name="token" placeholder="输入访问令牌" required autofocus>
+            <div class="error-message" id="errorMessage"></div>
+        </div>
+        <button type="submit" class="login-button">登录</button>
+    </form>
+</div>
+<script>
+const form = document.getElementById('loginForm');
+const errorMessage = document.getElementById('errorMessage');
+const tokenInput = document.getElementById('token');
+
+// Set form action to current path
+const currentPath = window.location.pathname;
+const currentSearch = window.location.search;
+form.action = currentPath + (currentSearch ? currentSearch + '&' : '?') + 'token=';
+
+// Check if there's an error in URL
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('error') === 'invalid') {
+    errorMessage.textContent = '令牌无效，请重试';
+    errorMessage.classList.add('show');
+    tokenInput.focus();
+}
+
+form.addEventListener('submit', function(e) {
+    const token = tokenInput.value.trim();
+    if (!token) {
+        e.preventDefault();
+        errorMessage.textContent = '请输入访问令牌';
+        errorMessage.classList.add('show');
+        tokenInput.focus();
+        return false;
+    }
+    // Update form action with token
+    form.action = currentPath + (currentSearch ? currentSearch + '&' : '?') + 'token=' + encodeURIComponent(token);
+});
+</script>
 </body>
 </html>`
 
@@ -1193,6 +1393,14 @@ body {
         <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">配置管理</h3>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
             <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">访问令牌（用于访问笔记）</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="access-token-input" value="{{.AccessToken}}" placeholder="留空表示无需授权" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('accessToken')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+                <div style="margin-top: 5px; font-size: 11px; color: #999;">留空表示无需授权即可访问笔记</div>
+            </div>
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
                 <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">管理后台路径</label>
                 <div style="display: flex; gap: 8px;">
                     <input type="text" id="admin-path-input" value="{{.AdminPath}}" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
@@ -1344,6 +1552,10 @@ function updateConfig(field) {
     let value;
 
     switch(field) {
+        case 'accessToken':
+            value = document.getElementById('access-token-input').value.trim();
+            payload.accessToken = value;
+            break;
         case 'adminPath':
             value = document.getElementById('admin-path-input').value.trim();
             if (!value) {
@@ -1447,6 +1659,7 @@ var (
 	clients     = make(map[string]map[*websocket.Conn]bool)
 	clientsLock = sync.RWMutex{}
 	adminToken  string
+	accessToken string // Token for accessing notes (different from admin token)
 )
 
 type Note struct {
@@ -1472,6 +1685,7 @@ func init() {
 // Config structure for saving/loading configuration
 type Config struct {
 	AdminToken    string `json:"adminToken"`
+	AccessToken   string `json:"accessToken"`
 	AdminPath     string `json:"adminPath"`
 	NoteNameLen   int    `json:"noteNameLen"`
 	BackupDays    int    `json:"backupDays"`
@@ -1510,6 +1724,9 @@ func loadConfig() bool {
 	// Update all values from config file
 	if config.AdminToken != "" {
 		adminToken = config.AdminToken
+	}
+	if config.AccessToken != "" {
+		accessToken = config.AccessToken
 	}
 	if config.AdminPath != "" {
 		adminPath = config.AdminPath
@@ -1559,6 +1776,7 @@ func saveConfig() {
 
 	config := Config{
 		AdminToken:    adminToken,
+		AccessToken:   accessToken,
 		AdminPath:     adminPath,
 		NoteNameLen:   noteNameLen,
 		BackupDays:    backupDays,
@@ -1798,7 +2016,7 @@ func parseFileSize(sizeStr string) (int64, error) {
 
 // getFileCreationTime 获取文件的创建时间
 // Windows: 通过 syscall 获取真实的创建时间
-// Linux: 尝试通过 statx 或 Stat_t 获取 birthtime，如果不可用则使用修改时间
+// Linux/Unix: 使用修改时间作为近似值（大多数文件系统不存储创建时间）
 // 其他平台: 使用修改时间作为近似值
 func getFileCreationTime(path string) (time.Time, error) {
 	// 获取文件信息
@@ -1808,18 +2026,20 @@ func getFileCreationTime(path string) (time.Time, error) {
 	}
 
 	// Windows: 通过 Win32FileAttributeData 获取创建时间
-	if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
-		// Windows 文件创建时间是从 1601-01-01 00:00:00 UTC 开始的 100 纳秒间隔
-		// 转换为 Unix 时间
-		ft := sys.CreationTime
-		// 合并高32位和低32位值（使用 uint64 避免溢出）
-		nsec100 := uint64(ft.HighDateTime)<<32 | uint64(ft.LowDateTime)
-		// Windows 纪元: 1601-01-01 00:00:00 UTC = 116444736000000000 (100纳秒间隔)
-		const windowsEpoch100ns = uint64(116444736000000000)
-		// 减去 Windows 纪元并转换为纳秒
-		unixNsec := int64((nsec100 - windowsEpoch100ns) * 100)
-		creationTime := time.Unix(0, unixNsec)
-		return creationTime, nil
+	if runtime.GOOS == "windows" {
+		if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+			// Windows 文件创建时间是从 1601-01-01 00:00:00 UTC 开始的 100 纳秒间隔
+			// 转换为 Unix 时间
+			ft := sys.CreationTime
+			// 合并高32位和低32位值（使用 uint64 避免溢出）
+			nsec100 := uint64(ft.HighDateTime)<<32 | uint64(ft.LowDateTime)
+			// Windows 纪元: 1601-01-01 00:00:00 UTC = 116444736000000000 (100纳秒间隔)
+			const windowsEpoch100ns = uint64(116444736000000000)
+			// 减去 Windows 纪元并转换为纳秒
+			unixNsec := int64((nsec100 - windowsEpoch100ns) * 100)
+			creationTime := time.Unix(0, unixNsec)
+			return creationTime, nil
+		}
 	}
 
 	// Linux/Unix: 标准库的 Stat_t 不包含 birthtime 字段
@@ -2090,6 +2310,22 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "POST" {
+		// Check access token for POST requests (creating/updating notes)
+		if accessToken != "" {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				// Try to get from Authorization header
+				authHeader := r.Header.Get("Authorization")
+				if strings.HasPrefix(authHeader, "Bearer ") {
+					token = strings.TrimPrefix(authHeader, "Bearer ")
+				}
+			}
+			if token != accessToken {
+				http.Error(w, "Unauthorized: Access token required", http.StatusUnauthorized)
+				return
+			}
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		content := string(body)
 
@@ -2339,6 +2575,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 		"MaxFileSize":      maxFileSize,
 		"MaxFileSizeMB":    currentMaxFileSizeMB,
 		"MaxPathLength":    maxPathLength,
+		"AccessToken":      accessToken,
 		"Token":            token,
 	})
 }
@@ -2426,6 +2663,22 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Check access token for file uploads
+	if accessToken != "" {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			// Try to get from Authorization header
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				token = strings.TrimPrefix(authHeader, "Bearer ")
+			}
+		}
+		if token != accessToken {
+			http.Error(w, "Unauthorized: Access token required", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Parse multipart form (max 100MB)
@@ -2588,6 +2841,7 @@ func handleUpdateMaxTotalSize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		AccessToken   *string `json:"accessToken,omitempty"`
 		AdminPath     *string `json:"adminPath,omitempty"`
 		NoteNameLen   *int    `json:"noteNameLen,omitempty"`
 		BackupDays    *int    `json:"backupDays,omitempty"`
@@ -2604,6 +2858,12 @@ func handleUpdateMaxTotalSize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated := false
+
+	// Update access token if provided
+	if req.AccessToken != nil {
+		accessToken = *req.AccessToken
+		updated = true
+	}
 
 	// Update admin path if provided
 	if req.AdminPath != nil && *req.AdminPath != "" {
@@ -2828,6 +3088,22 @@ func main() {
 		log.Fatal("Error: Admin token is required. Set it via -token flag, ADMIN_TOKEN environment variable, ADMIN_TOKEN in .env file, or adminToken in config.json")
 	}
 
+	// Get access token from: environment variable > config file > .env file
+	// Access token is optional - if not set, no authentication required for notes
+	if !configLoaded {
+		// Try to load from .env file first
+		if err := loadEnvFile(); err == nil {
+			if envAccessToken := os.Getenv("ACCESS_TOKEN"); envAccessToken != "" {
+				accessToken = envAccessToken
+			}
+		}
+	}
+	// If config was loaded, accessToken should already be set from config file
+	// But we can still override with environment variable
+	if envAccessToken := os.Getenv("ACCESS_TOKEN"); envAccessToken != "" {
+		accessToken = envAccessToken
+	}
+
 	// Load existing notes into memory cache
 	if err := loadExistingNotes(); err != nil {
 		log.Printf("Warning: Failed to load existing notes: %v", err)
@@ -2869,6 +3145,22 @@ func main() {
 	// Note routes (must be after specific routes)
 	r.HandleFunc("/{note}", handleNote).Methods("GET", "POST")
 	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Check access token if set (only for browser requests, not curl/wget)
+		if accessToken != "" && !strings.HasPrefix(r.UserAgent(), "curl") && !strings.HasPrefix(r.UserAgent(), "Wget") {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				authHeader := r.Header.Get("Authorization")
+				if strings.HasPrefix(authHeader, "Bearer ") {
+					token = strings.TrimPrefix(authHeader, "Bearer ")
+				}
+			}
+			if token != accessToken {
+				// Show login page
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write([]byte(accessLoginHTML))
+				return
+			}
+		}
 		http.Redirect(w, r, "/"+generateNoteName(), http.StatusFound)
 	}).Methods("GET")
 
