@@ -2227,7 +2227,7 @@ func getFileCreationTime(path string) (time.Time, error) {
 }
 
 // getFileCreationTimeWindows 在 Windows 平台上获取文件创建时间
-// 这个函数的实现位于 windows.go 文件中（使用 build tags）
+// 这个函数的实现位于 windows.go（Windows）和 windows_stub.go（非 Windows）文件中
 
 func saveNote(name, content string) error {
 	path := getNotePath(name)
