@@ -12,9 +12,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -23,15 +24,25 @@ import (
 )
 
 const (
-	savePath    = "_tmp"
-	backupPath  = "bak"
-	port        = ":8080"
-	noteNameLen = 3
-	backupDays  = 7 // Move notes to backup after 7 days of inactivity
+	savePath   = "_tmp"
+	backupPath = "bak"
+	uploadPath = "uploads" // Directory for uploaded files
 )
 
 var (
-	adminPath = "/admin" // Can be set via ADMIN_PATH env var or -admin-path flag
+	adminPath              = "/admin" // Can be set via ADMIN_PATH env var or -admin-path flag
+	port                   = ":8080"
+	noteNameLen            = 3
+	backupDays             = 7                                      // Move notes to backup after 7 days of inactivity
+	noteChars              = "0123456789abcdefghijklmnopqrstuvwxyz" // Characters used for generating note names
+	existingNotes          = sync.Map{}                             // In-memory cache of existing note names
+	maxFileSize      int64 = 10 * 1024 * 1024                       // Maximum file size in bytes (default: 10MB)
+	maxPathLength          = 20                                     // Maximum path/note name length (default: 20)
+	maxTotalSize     int64 = 500 * 1024 * 1024                      // Maximum total file size in bytes (default: 500MB)
+	maxTotalSizeLock       = sync.RWMutex{}                         // Lock for maxTotalSize
+	maxNoteCount           = 500                                    // Maximum number of notes (default: 500)
+	maxNoteCountLock       = sync.RWMutex{}                         // Lock for maxNoteCount
+	configFile             = "config.json"                          // Configuration file path
 )
 
 const notePageHTML = `<!DOCTYPE html>
@@ -147,6 +158,14 @@ body {
     margin: 1em 0;
     color: #666;
 }
+#preview img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1em auto;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
 #preview table {
     border-collapse: collapse;
     width: 100%;
@@ -219,6 +238,9 @@ body {
     #preview blockquote {
         border-color: #495265;
     }
+    #preview img {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
     #preview table th, #preview table td {
         border-color: #495265;
     }
@@ -251,7 +273,7 @@ body {
     </div>
     <div class="preview-panel">
         <div class="panel-header">
-            <span id="connection-status">●</span>
+            <span id="connection-status">连接中</span>
         </div>
         <div id="preview"></div>
     </div>
@@ -347,7 +369,7 @@ function connectWebSocket() {
     ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
-        connectionStatus.textContent = '●';
+        connectionStatus.textContent = '已连接';
         connectionStatus.style.color = '#4caf50';
     };
     
@@ -361,12 +383,12 @@ function connectWebSocket() {
     };
     
     ws.onerror = () => {
-        connectionStatus.textContent = '●';
+        connectionStatus.textContent = '连接错误';
         connectionStatus.style.color = '#f44336';
     };
     
     ws.onclose = () => {
-        connectionStatus.textContent = '●';
+        connectionStatus.textContent = '已断开';
         connectionStatus.style.color = '#999';
         setTimeout(connectWebSocket, 3000);
     };
@@ -385,6 +407,112 @@ editor.addEventListener('paste', () => {
     }, 100);
 });
 
+// Floating upload window
+const uploadWindow = document.createElement('div');
+uploadWindow.id = 'upload-window';
+uploadWindow.style.cssText = 'display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 1000; padding: 30px; min-width: 400px; max-width: 500px;';
+uploadWindow.innerHTML = '<div style="text-align: center; margin-bottom: 20px;"><h3 style="margin: 0 0 10px 0; font-size: 18px; color: #333;">上传文件</h3><p style="margin: 0; font-size: 14px; color: #666;">拖拽文件到此处或点击按钮选择</p></div><div id="upload-drop-zone" style="border: 2px dashed #0066cc; border-radius: 8px; padding: 40px; text-align: center; background: #f5f9ff; margin-bottom: 15px; transition: all 0.3s;"><div style="font-size: 48px; margin-bottom: 10px;">📁</div><div style="color: #0066cc; font-size: 16px; font-weight: 500;">拖拽文件到此处</div><div style="color: #999; font-size: 12px; margin-top: 5px;">或点击下方按钮选择文件</div></div><input type="file" id="file-input" style="display: none;" multiple><button id="upload-select-btn" style="width: 100%; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; font-size: 14px; font-weight: 500; cursor: pointer; margin-bottom: 10px;">选择文件</button><button id="upload-close-btn" style="width: 100%; padding: 10px; background: #f5f5f5; color: #666; border: none; border-radius: 4px; font-size: 14px; cursor: pointer;">取消</button>';
+document.body.appendChild(uploadWindow);
+
+const uploadDropZone = document.getElementById('upload-drop-zone');
+const fileInput = document.getElementById('file-input');
+const uploadSelectBtn = document.getElementById('upload-select-btn');
+const uploadCloseBtn = document.getElementById('upload-close-btn');
+
+// Upload button (floating button)
+const uploadFloatingBtn = document.createElement('button');
+uploadFloatingBtn.innerHTML = '📤 上传';
+uploadFloatingBtn.style.cssText = 'position: fixed; bottom: 20px; left: 20px; padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 25px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 10px rgba(0,102,204,0.3); z-index: 100; transition: all 0.3s;';
+uploadFloatingBtn.onmouseover = function() { uploadFloatingBtn.style.transform = 'scale(1.05)'; uploadFloatingBtn.style.boxShadow = '0 4px 15px rgba(0,102,204,0.4)'; };
+uploadFloatingBtn.onmouseout = function() { uploadFloatingBtn.style.transform = 'scale(1)'; uploadFloatingBtn.style.boxShadow = '0 2px 10px rgba(0,102,204,0.3)'; };
+uploadFloatingBtn.onclick = function() { uploadWindow.style.display = 'block'; };
+document.body.appendChild(uploadFloatingBtn);
+
+uploadSelectBtn.addEventListener('click', () => {
+    fileInput.click();
+});
+
+uploadCloseBtn.addEventListener('click', () => {
+    uploadWindow.style.display = 'none';
+    uploadDropZone.style.borderColor = '#0066cc';
+    uploadDropZone.style.background = '#f5f9ff';
+});
+
+fileInput.addEventListener('change', (e) => {
+    handleFiles(e.target.files);
+});
+
+// Drag and drop on upload window
+uploadDropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadDropZone.style.borderColor = '#0052a3';
+    uploadDropZone.style.background = '#e6f2ff';
+});
+
+uploadDropZone.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadDropZone.style.borderColor = '#0066cc';
+    uploadDropZone.style.background = '#f5f9ff';
+});
+
+uploadDropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadDropZone.style.borderColor = '#0066cc';
+    uploadDropZone.style.background = '#f5f9ff';
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+        handleFiles(files);
+    }
+});
+
+// Close window when clicking outside
+uploadWindow.addEventListener('click', (e) => {
+    if (e.target === uploadWindow) {
+        uploadWindow.style.display = 'none';
+    }
+});
+
+function handleFiles(files) {
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append('file', file);
+
+        showStatus('上传中...', false);
+
+        fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                // Insert markdown at cursor position
+                const cursorPos = editor.selectionStart;
+                const textBefore = editor.value.substring(0, cursorPos);
+                const textAfter = editor.value.substring(cursorPos);
+                editor.value = textBefore + data.markdown + '\n' + textAfter;
+                editor.selectionStart = editor.selectionEnd = cursorPos + data.markdown.length + 1;
+                lastContent = editor.value;
+                updatePreview();
+                saveNote();
+                showStatus('上传成功', false);
+                uploadWindow.style.display = 'none';
+            } else {
+                showStatus('上传失败: ' + (data.error || '未知错误'), true);
+            }
+        })
+        .catch(err => {
+            console.error('Upload error:', err);
+            showStatus('上传失败', true);
+        });
+    }
+    fileInput.value = '';
+}
+
 editor.focus();
 updatePreview();
 connectWebSocket();
@@ -392,6 +520,272 @@ connectWebSocket();
 // Auto-save every 2 seconds
 setInterval(saveNote, 2000);
 </script>
+</body>
+</html>`
+
+const readPageHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{.NoteName}} - 只读模式</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #ebeef1;
+    min-height: 100vh;
+    padding: 20px;
+}
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+.header {
+    background: #f5f5f5;
+    padding: 15px 20px;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.header-info {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    font-size: 13px;
+    color: #666;
+}
+.header-info-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.header-info-label {
+    color: #999;
+}
+.header-info-value {
+    color: #333;
+    font-weight: 500;
+}
+.header-actions {
+    display: flex;
+    gap: 10px;
+}
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    transition: all 0.2s;
+}
+.btn-primary {
+    background: #0066cc;
+    color: white;
+}
+.btn-primary:hover {
+    background: #0052a3;
+}
+.btn-secondary {
+    background: #f5f5f5;
+    color: #666;
+    border: 1px solid #ddd;
+}
+.btn-secondary:hover {
+    background: #e9e9e9;
+}
+.content {
+    padding: 30px;
+}
+#preview {
+    line-height: 1.8;
+    color: #333;
+}
+#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6 {
+    margin-top: 1.5em;
+    margin-bottom: 0.8em;
+    font-weight: 600;
+}
+#preview h1 {
+    font-size: 2em;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 0.3em;
+}
+#preview h2 {
+    font-size: 1.5em;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 0.3em;
+}
+#preview p {
+    margin-bottom: 1em;
+}
+#preview code {
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.9em;
+}
+#preview pre {
+    background: #f5f5f5;
+    padding: 15px;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 1.5em 0;
+    border-left: 4px solid #0066cc;
+}
+#preview pre code {
+    background: none;
+    padding: 0;
+}
+#preview blockquote {
+    border-left: 4px solid #ddd;
+    padding-left: 1em;
+    margin: 1.5em 0;
+    color: #666;
+    font-style: italic;
+}
+#preview table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5em 0;
+}
+#preview table th, #preview table td {
+    border: 1px solid #ddd;
+    padding: 10px;
+    text-align: left;
+}
+#preview table th {
+    background: #f5f5f5;
+    font-weight: 600;
+}
+#preview ul, #preview ol {
+    margin: 1em 0;
+    padding-left: 2em;
+}
+#preview li {
+    margin: 0.5em 0;
+}
+#preview img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin: 1em 0;
+}
+#preview a {
+    color: #0066cc;
+    text-decoration: none;
+}
+#preview a:hover {
+    text-decoration: underline;
+}
+.empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: #999;
+}
+.empty-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+}
+@media (prefers-color-scheme: dark) {
+    body {
+        background: #333b4d;
+    }
+    .container {
+        background: #24262b;
+    }
+    .header {
+        background: #1a1a1a;
+        border-color: #495265;
+    }
+    .header-info-label {
+        color: #aaa;
+    }
+    .header-info-value {
+        color: #fff;
+    }
+    .content {
+        background: #24262b;
+    }
+    #preview {
+        color: #fff;
+    }
+    #preview h1, #preview h2 {
+        border-color: #495265;
+    }
+    #preview code {
+        background: #1a1a1a;
+    }
+    #preview pre {
+        background: #1a1a1a;
+        border-color: #0066cc;
+    }
+    #preview blockquote {
+        border-color: #495265;
+    }
+    #preview table th, #preview table td {
+        border-color: #495265;
+    }
+    #preview table th {
+        background: #1a1a1a;
+    }
+    .btn-secondary {
+        background: #1a1a1a;
+        color: #aaa;
+        border-color: #495265;
+    }
+    .btn-secondary:hover {
+        background: #2a2a2a;
+    }
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div class="header-info">
+            <div class="header-info-item">
+                <span class="header-info-label">大小:</span>
+                <span class="header-info-value">{{.FileSize}}</span>
+            </div>
+            <div class="header-info-item">
+                <span class="header-info-label">创建:</span>
+                <span class="header-info-value">{{.CreateTime}}</span>
+            </div>
+            <div class="header-info-item">
+                <span class="header-info-label">修改:</span>
+                <span class="header-info-value">{{.ModTime}}</span>
+            </div>
+        </div>
+        <div class="header-actions">
+            <a href="/{{.NoteName}}" class="btn btn-primary">编辑</a>
+            <a href="/" class="btn btn-secondary">新建笔记</a>
+        </div>
+    </div>
+    <div class="content">
+        {{if .Content}}
+        <div id="preview">{{.Content}}</div>
+        {{else}}
+        <div class="empty">
+            <div class="empty-icon">📄</div>
+            <p>笔记为空</p>
+            <a href="/{{.NoteName}}" class="btn btn-primary" style="margin-top: 20px;">开始编辑</a>
+        </div>
+        {{end}}
+    </div>
+</div>
 </body>
 </html>`
 
@@ -774,6 +1168,74 @@ body {
             <span class="stat-label">总大小</span>
             <span class="stat-value" id="total-size">{{formatSize .TotalSize}}</span>
         </div>
+        <div class="stat-item">
+            <span class="stat-label">当前总文件大小（含上传）</span>
+            <span class="stat-value" id="current-total-size">{{formatSize .CurrentTotalSize}}</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">最大总文件大小限制</span>
+            <span class="stat-value" id="max-total-size">{{formatSize .MaxTotalSize}}</span>
+            <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="max-total-size-input" placeholder="如: 500MB" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; width: 120px;">
+                <button onclick="updateMaxTotalSize()" style="padding: 4px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            </div>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">最大笔记数量限制</span>
+            <span class="stat-value" id="max-note-count">{{.MaxNoteCount}}</span>
+            <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+                <input type="number" id="max-note-count-input" placeholder="如: 500" min="1" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; width: 120px;">
+                <button onclick="updateConfig('maxNoteCount')" style="padding: 4px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            </div>
+        </div>
+    </div>
+    <div style="padding: 20px; background: #f9f9f9; border-top: 1px solid #ddd;">
+        <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">配置管理</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">管理后台路径</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="admin-path-input" value="{{.AdminPath}}" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('adminPath')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+            </div>
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">笔记名称最小长度</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="number" id="note-name-len-input" value="{{.NoteNameLen}}" min="1" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('noteNameLen')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+            </div>
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">备份天数</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="number" id="backup-days-input" value="{{.BackupDays}}" min="1" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('backupDays')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+            </div>
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">随机字符串字符集</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="note-chars-input" value="{{.NoteChars}}" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('noteChars')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+            </div>
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">最大文件大小</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="max-file-size-input" placeholder="如: 10MB" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('maxFileSize')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+                <div style="margin-top: 5px; font-size: 11px; color: #999;">当前: {{.MaxFileSizeMB}} MB</div>
+            </div>
+            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">最大路径长度</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="number" id="max-path-length-input" value="{{.MaxPathLength}}" min="1" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+                    <button onclick="updateConfig('maxPathLength')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+                </div>
+            </div>
+        </div>
     </div>
     <div class="notes-list">
         <div id="active-notes" class="tab-content">
@@ -867,6 +1329,111 @@ function showTab(tabName) {
 setInterval(() => {
     location.reload();
 }, 30000);
+
+function updateMaxTotalSize() {
+    updateConfig('maxTotalSize');
+}
+
+function updateMaxNoteCount() {
+    updateConfig('maxNoteCount');
+}
+
+function updateConfig(field) {
+    const token = '{{.Token}}';
+    let payload = {};
+    let value;
+
+    switch(field) {
+        case 'adminPath':
+            value = document.getElementById('admin-path-input').value.trim();
+            if (!value) {
+                alert('请输入管理后台路径');
+                return;
+            }
+            payload.adminPath = value;
+            break;
+        case 'noteNameLen':
+            value = parseInt(document.getElementById('note-name-len-input').value);
+            if (isNaN(value) || value <= 0) {
+                alert('请输入有效的数字');
+                return;
+            }
+            payload.noteNameLen = value;
+            break;
+        case 'backupDays':
+            value = parseInt(document.getElementById('backup-days-input').value);
+            if (isNaN(value) || value <= 0) {
+                alert('请输入有效的数字');
+                return;
+            }
+            payload.backupDays = value;
+            break;
+        case 'noteChars':
+            value = document.getElementById('note-chars-input').value.trim();
+            if (!value) {
+                alert('请输入字符集');
+                return;
+            }
+            payload.noteChars = value;
+            break;
+        case 'maxFileSize':
+            value = document.getElementById('max-file-size-input').value.trim();
+            if (!value) {
+                alert('请输入文件大小限制（如: 10MB）');
+                return;
+            }
+            payload.maxFileSize = value;
+            break;
+        case 'maxPathLength':
+            value = parseInt(document.getElementById('max-path-length-input').value);
+            if (isNaN(value) || value <= 0) {
+                alert('请输入有效的数字');
+                return;
+            }
+            payload.maxPathLength = value;
+            break;
+        case 'maxTotalSize':
+            value = document.getElementById('max-total-size-input').value.trim();
+            if (!value) {
+                alert('请输入大小限制（如: 500MB）');
+                return;
+            }
+            payload.maxTotalSize = value;
+            break;
+        case 'maxNoteCount':
+            value = parseInt(document.getElementById('max-note-count-input').value);
+            if (isNaN(value) || value <= 0) {
+                alert('请输入有效的数字');
+                return;
+            }
+            payload.maxNoteCount = value;
+            break;
+        default:
+            alert('未知的配置项');
+            return;
+    }
+
+    fetch('/api/max-total-size?token=' + encodeURIComponent(token), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            alert('配置已更新并保存到配置文件');
+            location.reload();
+        } else {
+            alert('更新失败: ' + (data.error || '未知错误'));
+        }
+    })
+    .catch(err => {
+        console.error('Update error:', err);
+        alert('更新失败');
+    });
+}
 </script>
 </body>
 </html>`
@@ -896,9 +1463,128 @@ type NoteListResponse struct {
 func init() {
 	os.MkdirAll(savePath, 0755)
 	os.MkdirAll(backupPath, 0755)
+	os.MkdirAll(uploadPath, 0755)
+	// Try to load configuration from file (if exists)
+	// If config file doesn't exist, will load from env/command line in main()
+	loadConfig()
 }
 
-// loadEnvFile loads environment variables from .env file
+// Config structure for saving/loading configuration
+type Config struct {
+	AdminToken    string `json:"adminToken"`
+	AdminPath     string `json:"adminPath"`
+	NoteNameLen   int    `json:"noteNameLen"`
+	BackupDays    int    `json:"backupDays"`
+	NoteChars     string `json:"noteChars"`
+	MaxFileSize   int64  `json:"maxFileSize"`
+	MaxPathLength int    `json:"maxPathLength"`
+	MaxTotalSize  int64  `json:"maxTotalSize"`
+	MaxNoteCount  int    `json:"maxNoteCount"`
+}
+
+// configLoaded indicates if config file exists and was loaded
+var configLoaded = false
+
+// loadConfig loads configuration from config.json file
+// Returns true if config file exists and was loaded successfully
+func loadConfig() bool {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Config file doesn't exist, will use defaults from env/command line
+			configLoaded = false
+			return false
+		}
+		log.Printf("Warning: Failed to read config file: %v", err)
+		configLoaded = false
+		return false
+	}
+
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		log.Printf("Warning: Failed to parse config file: %v", err)
+		configLoaded = false
+		return false
+	}
+
+	// Update all values from config file
+	if config.AdminToken != "" {
+		adminToken = config.AdminToken
+	}
+	if config.AdminPath != "" {
+		adminPath = config.AdminPath
+		if !strings.HasPrefix(adminPath, "/") {
+			adminPath = "/" + adminPath
+		}
+	}
+	if config.NoteNameLen > 0 {
+		noteNameLen = config.NoteNameLen
+	}
+	if config.BackupDays > 0 {
+		backupDays = config.BackupDays
+	}
+	if config.NoteChars != "" {
+		noteChars = config.NoteChars
+	}
+	if config.MaxFileSize > 0 {
+		maxFileSize = config.MaxFileSize
+	}
+	if config.MaxPathLength > 0 {
+		maxPathLength = config.MaxPathLength
+	}
+	if config.MaxTotalSize > 0 {
+		maxTotalSizeLock.Lock()
+		maxTotalSize = config.MaxTotalSize
+		maxTotalSizeLock.Unlock()
+	}
+	if config.MaxNoteCount > 0 {
+		maxNoteCountLock.Lock()
+		maxNoteCount = config.MaxNoteCount
+		maxNoteCountLock.Unlock()
+	}
+
+	configLoaded = true
+	return true
+}
+
+// saveConfig saves current configuration to config.json file
+func saveConfig() {
+	maxTotalSizeLock.RLock()
+	currentMaxTotalSize := maxTotalSize
+	maxTotalSizeLock.RUnlock()
+
+	maxNoteCountLock.RLock()
+	currentMaxNoteCount := maxNoteCount
+	maxNoteCountLock.RUnlock()
+
+	config := Config{
+		AdminToken:    adminToken,
+		AdminPath:     adminPath,
+		NoteNameLen:   noteNameLen,
+		BackupDays:    backupDays,
+		NoteChars:     noteChars,
+		MaxFileSize:   maxFileSize,
+		MaxPathLength: maxPathLength,
+		MaxTotalSize:  currentMaxTotalSize,
+		MaxNoteCount:  currentMaxNoteCount,
+	}
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		log.Printf("Warning: Failed to marshal config: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(configFile, data, 0644); err != nil {
+		log.Printf("Warning: Failed to save config file: %v", err)
+		return
+	}
+
+	configLoaded = true
+	log.Printf("Configuration saved to %s", configFile)
+}
+
+// loadEnvFile 从 .env 文件加载环境变量
 func loadEnvFile() error {
 	file, err := os.Open(".env")
 	if err != nil {
@@ -929,32 +1615,241 @@ func loadEnvFile() error {
 	return scanner.Err()
 }
 
-func generateNoteName() string {
-	// Use lowercase letters and numbers only (no uppercase to avoid input method switching)
-	chars := "0123456789abcdefghijklmnopqrstuvwxyz"
-	name := make([]byte, noteNameLen)
-	for i := range name {
-		name[i] = chars[rand.Intn(len(chars))]
+// loadExistingNotes 将所有已存在的笔记名称加载到内存中
+func loadExistingNotes() error {
+	files, err := os.ReadDir(savePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Directory doesn't exist yet, no notes to load
+		}
+		return err
 	}
-	return string(name)
+
+	for _, file := range files {
+		if !file.IsDir() && isSafeNoteName(file.Name()) {
+			existingNotes.Store(file.Name(), true)
+		}
+	}
+
+	return nil
 }
 
-func isValidNoteName(name string) bool {
-	matched, _ := regexp.MatchString("^[a-zA-Z0-9_-]+$", name)
-	return matched && len(name) <= 64
+// isNoteExists 检查笔记名称是否已存在（使用内存缓存）
+func isNoteExists(name string) bool {
+	_, exists := existingNotes.Load(name)
+	return exists
+}
+
+// addNoteToCache 将笔记名称添加到内存缓存中
+func addNoteToCache(name string) {
+	existingNotes.Store(name, true)
+}
+
+// removeNoteFromCache 从内存缓存中移除笔记名称
+func removeNoteFromCache(name string) {
+	existingNotes.Delete(name)
+}
+
+func generateNoteName() string {
+	// 从最小长度开始，如果名称已存在则增加长度
+	length := noteNameLen
+	maxAttempts := 100 // 由于使用内存缓存，增加尝试次数
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		name := make([]byte, length)
+		for i := range name {
+			name[i] = noteChars[rand.Intn(len(noteChars))]
+		}
+		noteName := string(name)
+
+		// 使用内存缓存检查笔记是否已存在
+		if !isNoteExists(noteName) {
+			// 立即添加到缓存以防止竞态条件
+			addNoteToCache(noteName)
+			return noteName
+		}
+
+		// 如果名称存在且尚未达到最大长度，增加长度
+		// 如果已经是 4 位或更多，则使用相同长度重试
+		if length < 4 {
+			length = 4
+		} else if attempt%10 == 0 {
+			// 每 10 次尝试，增加长度以避免太多冲突
+			length++
+		}
+	}
+
+	// 如果所有尝试都失败，继续尝试增加长度
+	// 如果 noteChars 有足够的字符，这应该很少发生
+	for length < 20 {
+		length++
+		for attempt := 0; attempt < 50; attempt++ {
+			name := make([]byte, length)
+			for i := range name {
+				name[i] = noteChars[rand.Intn(len(noteChars))]
+			}
+			noteName := string(name)
+			if !isNoteExists(noteName) {
+				addNoteToCache(noteName)
+				return noteName
+			}
+		}
+	}
+
+	// 最后手段：这在实践中不应该发生
+	// 但如果发生了，返回一个错误指示名称
+	log.Printf("警告: 经过多次尝试后仍无法生成唯一的笔记名称")
+	return ""
+}
+
+// isSafeNoteName checks if a note name is safe (prevents path traversal attacks)
+// This is only for basic security, not for restricting user input
+func isSafeNoteName(name string) bool {
+	if name == "" || len(name) > maxPathLength {
+		return false
+	}
+	// Prevent path traversal and other dangerous patterns
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	// Prevent control characters
+	for _, r := range name {
+		if r < 32 && r != '\t' && r != '\n' && r != '\r' {
+			return false
+		}
+	}
+	return true
+}
+
+// isValidGeneratedName 检查名称是否对自动生成的笔记有效
+// 这限制生成的名称只能使用 noteChars 字符集中的字符
+func isValidGeneratedName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for _, r := range name {
+		if !strings.ContainsRune(noteChars, r) {
+			return false
+		}
+	}
+	return true
 }
 
 func getNotePath(name string) string {
 	return filepath.Join(savePath, name)
 }
 
+// parseFileSize parses a file size string like "10M", "100MB", "1G" into bytes
+func parseFileSize(sizeStr string) (int64, error) {
+	sizeStr = strings.TrimSpace(sizeStr)
+	if sizeStr == "" {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	// Remove "B" or "BYTE" suffix if present (case insensitive)
+	sizeStr = strings.ToUpper(sizeStr)
+	sizeStr = strings.TrimSuffix(sizeStr, "BYTES")
+	sizeStr = strings.TrimSuffix(sizeStr, "BYTE")
+	sizeStr = strings.TrimSuffix(sizeStr, "B")
+	sizeStr = strings.TrimSpace(sizeStr)
+
+	if sizeStr == "" {
+		return 0, fmt.Errorf("invalid size format")
+	}
+
+	// Find the last non-digit character to determine the unit
+	var numStr string
+	var unit string
+	for i := len(sizeStr) - 1; i >= 0; i-- {
+		if sizeStr[i] >= '0' && sizeStr[i] <= '9' || sizeStr[i] == '.' {
+			numStr = sizeStr[:i+1]
+			unit = sizeStr[i+1:]
+			break
+		}
+	}
+	if numStr == "" {
+		numStr = sizeStr
+		unit = ""
+	}
+
+	// Parse the number
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number: %v", err)
+	}
+
+	// Convert based on unit
+	unit = strings.ToUpper(strings.TrimSpace(unit))
+	switch unit {
+	case "", "B":
+		return int64(num), nil
+	case "K", "KB":
+		return int64(num * 1024), nil
+	case "M", "MB":
+		return int64(num * 1024 * 1024), nil
+	case "G", "GB":
+		return int64(num * 1024 * 1024 * 1024), nil
+	case "T", "TB":
+		return int64(num * 1024 * 1024 * 1024 * 1024), nil
+	default:
+		return 0, fmt.Errorf("unknown unit: %s", unit)
+	}
+}
+
+// getFileCreationTime 获取文件的创建时间
+// Windows: 通过 syscall 获取真实的创建时间
+// Linux: 尝试通过 statx 或 Stat_t 获取 birthtime，如果不可用则使用修改时间
+// 其他平台: 使用修改时间作为近似值
+func getFileCreationTime(path string) (time.Time, error) {
+	// 获取文件信息
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	// Windows: 通过 Win32FileAttributeData 获取创建时间
+	if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+		// Windows 文件创建时间是从 1601-01-01 00:00:00 UTC 开始的 100 纳秒间隔
+		// 转换为 Unix 时间
+		ft := sys.CreationTime
+		// 合并高32位和低32位值（使用 uint64 避免溢出）
+		nsec100 := uint64(ft.HighDateTime)<<32 | uint64(ft.LowDateTime)
+		// Windows 纪元: 1601-01-01 00:00:00 UTC = 116444736000000000 (100纳秒间隔)
+		const windowsEpoch100ns = uint64(116444736000000000)
+		// 减去 Windows 纪元并转换为纳秒
+		unixNsec := int64((nsec100 - windowsEpoch100ns) * 100)
+		creationTime := time.Unix(0, unixNsec)
+		return creationTime, nil
+	}
+
+	// Linux/Unix: 标准库的 Stat_t 不包含 birthtime 字段
+	// 虽然 ext4 等文件系统支持创建时间，但需要通过 statx 系统调用获取
+	// 这需要 CGO 或额外的系统调用，为了简化，这里使用修改时间作为近似值
+	// 注意：在 Linux 上，大多数文件系统不存储创建时间，只有修改时间和访问时间
+	// 如果文件系统支持，可以通过 statx 系统调用获取，但需要额外的实现
+	// 这里统一使用修改时间作为回退
+
+	// 其他平台或获取失败时，使用修改时间作为近似值
+	return info.ModTime(), nil
+}
+
 func saveNote(name, content string) error {
 	path := getNotePath(name)
 	if content == "" {
 		os.Remove(path)
+		removeNoteFromCache(name)
 		return nil
 	}
-	return os.WriteFile(path, []byte(content), 0644)
+
+	// 检查这是否是新笔记
+	wasNewNote := !isNoteExists(name)
+
+	err := os.WriteFile(path, []byte(content), 0644)
+	if err == nil && wasNewNote {
+		// 如果是新笔记，添加到缓存
+		addNoteToCache(name)
+	}
+	return err
 }
 
 func loadNote(name string) (string, error) {
@@ -977,7 +1872,7 @@ func getAllNotes() ([]Note, error) {
 
 	notes := make([]Note, 0)
 	for _, file := range files {
-		if !file.IsDir() && isValidNoteName(file.Name()) {
+		if !file.IsDir() && isSafeNoteName(file.Name()) {
 			content, _ := loadNote(file.Name())
 			info, _ := file.Info()
 			notes = append(notes, Note{
@@ -991,8 +1886,41 @@ func getAllNotes() ([]Note, error) {
 	return notes, nil
 }
 
-// moveOldNotesToBackup moves notes that haven't been modified for backupDays days to backup folder
-// Backup folder structure: bak/YYYYMMDD/note_name
+// getTotalFileSize calculates the total size of all files in savePath and uploadPath (excluding backupPath)
+func getTotalFileSize() (int64, error) {
+	var totalSize int64
+
+	// Calculate size of notes in savePath
+	if err := filepath.Walk(savePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			totalSize += info.Size()
+		}
+		return nil
+	}); err != nil && !os.IsNotExist(err) {
+		return 0, err
+	}
+
+	// Calculate size of uploaded files in uploadPath
+	if err := filepath.Walk(uploadPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			totalSize += info.Size()
+		}
+		return nil
+	}); err != nil && !os.IsNotExist(err) {
+		return 0, err
+	}
+
+	return totalSize, nil
+}
+
+// moveOldNotesToBackup 将超过 backupDays 天未修改的笔记移动到备份文件夹
+// 备份文件夹结构: bak/YYYYMMDD/note_name
 func moveOldNotesToBackup() error {
 	files, err := os.ReadDir(savePath)
 	if err != nil {
@@ -1003,7 +1931,7 @@ func moveOldNotesToBackup() error {
 	movedCount := 0
 
 	for _, file := range files {
-		if file.IsDir() || !isValidNoteName(file.Name()) {
+		if file.IsDir() || !isSafeNoteName(file.Name()) {
 			continue
 		}
 
@@ -1045,7 +1973,7 @@ func moveOldNotesToBackup() error {
 	return nil
 }
 
-// getAllBackupNotes returns all notes from backup folders
+// getAllBackupNotes 返回备份文件夹中的所有笔记
 func getAllBackupNotes() ([]Note, error) {
 	backupNotes := make([]Note, 0)
 
@@ -1072,7 +2000,7 @@ func getAllBackupNotes() ([]Note, error) {
 		}
 
 		for _, file := range files {
-			if file.IsDir() || !isValidNoteName(file.Name()) {
+			if file.IsDir() || !isSafeNoteName(file.Name()) {
 				continue
 			}
 
@@ -1104,13 +2032,14 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	noteName := vars["note"]
 
-	if noteName == "" || !isValidNoteName(noteName) {
+	// 只检查是否为空或不安全（允许用户输入任意字符）
+	if noteName == "" || !isSafeNoteName(noteName) {
 		http.Redirect(w, r, "/"+generateNoteName(), http.StatusFound)
 		return
 	}
 
 	if r.Method == "GET" {
-		// Check if raw or curl/wget
+		// 检查是否是 raw 请求或 curl/wget
 		if r.URL.Query().Get("raw") != "" || strings.HasPrefix(r.UserAgent(), "curl") || strings.HasPrefix(r.UserAgent(), "Wget") {
 			content, err := loadNote(noteName)
 			if err != nil || content == "" {
@@ -1125,16 +2054,22 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 		// Serve HTML page
 		content, _ := loadNote(noteName)
 
-		// Get file info for size and modification time
+		// 获取文件信息（大小和修改时间）
 		var fileSize int64
 		var modTime time.Time
 		var createTime time.Time
 		notePath := getNotePath(noteName)
+
 		if info, err := os.Stat(notePath); err == nil {
 			fileSize = info.Size()
 			modTime = info.ModTime()
-			// For creation time, use ModTime as fallback (creation time is platform-specific)
-			createTime = modTime
+			// 尝试获取创建时间（Windows 上可用，其他平台回退到修改时间）
+			if ct, err := getFileCreationTime(notePath); err == nil {
+				createTime = ct
+			} else {
+				// 如果无法获取创建时间，回退到修改时间
+				createTime = modTime
+			}
 		}
 
 		// Format size
@@ -1166,6 +2101,54 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Check file size limit
+		contentSize := int64(len([]byte(content)))
+		if contentSize > maxFileSize {
+			http.Error(w, fmt.Sprintf("File size exceeds maximum limit of %d bytes (%d MB)", maxFileSize, maxFileSize/(1024*1024)), http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		// Check note count limit (only for new notes)
+		wasNewNote := !isNoteExists(noteName)
+		if wasNewNote {
+			maxNoteCountLock.RLock()
+			currentMaxNoteCount := maxNoteCount
+			maxNoteCountLock.RUnlock()
+
+			// Count existing notes
+			notes, err := getAllNotes()
+			if err != nil {
+				log.Printf("Error getting notes: %v", err)
+			} else {
+				if len(notes) >= currentMaxNoteCount {
+					http.Error(w, fmt.Sprintf("Maximum number of notes (%d) has been reached. Please delete some notes or increase the limit in admin panel.", currentMaxNoteCount), http.StatusForbidden)
+					return
+				}
+			}
+		}
+
+		// Check total file size limit
+		maxTotalSizeLock.RLock()
+		currentMaxTotalSize := maxTotalSize
+		maxTotalSizeLock.RUnlock()
+
+		currentTotalSize, err := getTotalFileSize()
+		if err != nil {
+			log.Printf("Error calculating total file size: %v", err)
+		} else {
+			// Get current note size if it exists
+			var currentNoteSize int64
+			if info, err := os.Stat(getNotePath(noteName)); err == nil {
+				currentNoteSize = info.Size()
+			}
+			// Calculate new total size
+			newTotalSize := currentTotalSize - currentNoteSize + contentSize
+			if newTotalSize > currentMaxTotalSize {
+				http.Error(w, fmt.Sprintf("Total file size would exceed maximum limit of %d MB (current: %.2f MB, would be: %.2f MB)", currentMaxTotalSize/(1024*1024), float64(currentTotalSize)/(1024*1024), float64(newTotalSize)/(1024*1024)), http.StatusRequestEntityTooLarge)
+				return
+			}
+		}
+
 		if err := saveNote(noteName, content); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1179,6 +2162,66 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func handleReadNote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	vars := mux.Vars(r)
+	noteName := vars["note"]
+
+	// 只检查是否为空或不安全
+	if noteName == "" || !isSafeNoteName(noteName) {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Load note content
+	content, err := loadNote(noteName)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// 获取文件信息（大小和修改时间）
+	var fileSize int64
+	var modTime time.Time
+	var createTime time.Time
+	notePath := getNotePath(noteName)
+
+	if info, err := os.Stat(notePath); err == nil {
+		fileSize = info.Size()
+		modTime = info.ModTime()
+		// 尝试获取创建时间（Windows 上可用，其他平台回退到修改时间）
+		if ct, err := getFileCreationTime(notePath); err == nil {
+			createTime = ct
+		} else {
+			// 如果无法获取创建时间，回退到修改时间
+			createTime = modTime
+		}
+	}
+
+	// Format size
+	sizeStr := fmt.Sprintf("%d B", fileSize)
+	if fileSize >= 1024 {
+		sizeStr = fmt.Sprintf("%.2f KB", float64(fileSize)/1024.0)
+	}
+
+	// Render markdown to HTML
+	htmlContent := blackfriday.Run([]byte(content))
+
+	// Parse and execute template
+	tmpl := template.Must(template.New("read").Parse(readPageHTML))
+	tmpl.Execute(w, map[string]interface{}{
+		"NoteName":   noteName,
+		"Content":    template.HTML(htmlContent),
+		"FileSize":   sizeStr,
+		"ModTime":    modTime.Format("2006-01-02 15:04:05"),
+		"CreateTime": createTime.Format("2006-01-02 15:04:05"),
+	})
 }
 
 func handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -1237,13 +2280,35 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 		backupTotalSize += note.Size
 	}
 
+	// Get current total file size (including uploads)
+	currentTotalSize, _ := getTotalFileSize()
+
+	// Get current max total size
+	maxTotalSizeLock.RLock()
+	currentMaxTotalSize := maxTotalSize
+	maxTotalSizeLock.RUnlock()
+
+	// Get current max note count
+	maxNoteCountLock.RLock()
+	currentMaxNoteCount := maxNoteCount
+	maxNoteCountLock.RUnlock()
+
+	// Get current values for display
+	currentMaxFileSizeMB := int(maxFileSize / (1024 * 1024))
+
 	// Prepare template functions
 	funcMap := template.FuncMap{
 		"formatSize": func(size int64) string {
 			if size < 1024 {
 				return fmt.Sprintf("%d B", size)
 			}
-			return fmt.Sprintf("%.2f KB", float64(size)/1024.0)
+			if size < 1024*1024 {
+				return fmt.Sprintf("%.2f KB", float64(size)/1024.0)
+			}
+			if size < 1024*1024*1024 {
+				return fmt.Sprintf("%.2f MB", float64(size)/(1024.0*1024.0))
+			}
+			return fmt.Sprintf("%.2f GB", float64(size)/(1024.0*1024.0*1024.0))
 		},
 		"formatDate": func(t time.Time) string {
 			return t.Format("2006-01-02 15:04:05")
@@ -1258,12 +2323,23 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 	tmpl := template.Must(template.New("admin").Funcs(funcMap).Parse(adminPageHTML))
 	tmpl.Execute(w, map[string]interface{}{
-		"Notes":           notes,
-		"BackupNotes":     backupNotes,
-		"TotalSize":       totalSize,
-		"BackupTotalSize": backupTotalSize,
-		"TotalCount":      len(notes),
-		"BackupCount":     len(backupNotes),
+		"Notes":            notes,
+		"BackupNotes":      backupNotes,
+		"TotalSize":        totalSize,
+		"BackupTotalSize":  backupTotalSize,
+		"TotalCount":       len(notes),
+		"BackupCount":      len(backupNotes),
+		"CurrentTotalSize": currentTotalSize,
+		"MaxTotalSize":     currentMaxTotalSize,
+		"MaxNoteCount":     currentMaxNoteCount,
+		"AdminPath":        adminPath,
+		"NoteNameLen":      noteNameLen,
+		"BackupDays":       backupDays,
+		"NoteChars":        noteChars,
+		"MaxFileSize":      maxFileSize,
+		"MaxFileSizeMB":    currentMaxFileSizeMB,
+		"MaxPathLength":    maxPathLength,
+		"Token":            token,
 	})
 }
 
@@ -1271,7 +2347,8 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	noteName := vars["note"]
 
-	if !isValidNoteName(noteName) {
+	// Only check if unsafe (allow any characters for user input)
+	if !isSafeNoteName(noteName) {
 		http.Error(w, "Invalid note name", http.StatusBadRequest)
 		return
 	}
@@ -1345,38 +2422,422 @@ func handleMarkdownRender(w http.ResponseWriter, r *http.Request) {
 	w.Write(output)
 }
 
+func handleFileUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse multipart form (max 100MB)
+	err := r.ParseMultipartForm(100 << 20)
+	if err != nil {
+		http.Error(w, "Error parsing form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Error retrieving file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Check file size
+	if handler.Size > maxFileSize {
+		http.Error(w, fmt.Sprintf("File size exceeds maximum limit of %d MB", maxFileSize/(1024*1024)), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Check total file size limit
+	maxTotalSizeLock.RLock()
+	currentMaxTotalSize := maxTotalSize
+	maxTotalSizeLock.RUnlock()
+
+	currentTotalSize, err := getTotalFileSize()
+	if err != nil {
+		log.Printf("Error calculating total file size: %v", err)
+	} else {
+		newTotalSize := currentTotalSize + handler.Size
+		if newTotalSize > currentMaxTotalSize {
+			http.Error(w, fmt.Sprintf("Total file size would exceed maximum limit of %d MB", currentMaxTotalSize/(1024*1024)), http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
+
+	// Generate unique filename
+	filename := handler.Filename
+	// Sanitize filename
+	filename = filepath.Base(filename)
+	if filename == "" || filename == "." || filename == ".." {
+		filename = "upload_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	// Check if file already exists, add suffix if needed
+	uploadFilePath := filepath.Join(uploadPath, filename)
+	counter := 1
+	originalFilename := filename
+	for {
+		if _, err := os.Stat(uploadFilePath); os.IsNotExist(err) {
+			break
+		}
+		ext := filepath.Ext(originalFilename)
+		name := strings.TrimSuffix(originalFilename, ext)
+		filename = fmt.Sprintf("%s_%d%s", name, counter, ext)
+		uploadFilePath = filepath.Join(uploadPath, filename)
+		counter++
+	}
+
+	// Create file
+	dst, err := os.Create(uploadFilePath)
+	if err != nil {
+		http.Error(w, "Error creating file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	// Copy file content
+	_, err = io.Copy(dst, file)
+	if err != nil {
+		http.Error(w, "Error saving file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Determine if it's an image
+	isImage := false
+	imageExts := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg"}
+	ext := strings.ToLower(filepath.Ext(filename))
+	for _, imgExt := range imageExts {
+		if ext == imgExt {
+			isImage = true
+			break
+		}
+	}
+
+	// Return markdown format
+	fileURL := "/uploads/" + filename
+	var markdown string
+	if isImage {
+		markdown = fmt.Sprintf("![%s](%s)", filename, fileURL)
+	} else {
+		markdown = fmt.Sprintf("[下载 %s](%s)", filename, fileURL)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"filename": filename,
+		"url":      fileURL,
+		"markdown": markdown,
+	})
+}
+
+func handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	filename := vars["filename"]
+
+	// Security check: prevent path traversal
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		http.Error(w, "Invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	filePath := filepath.Join(uploadPath, filename)
+
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Check if it's an image - serve directly, otherwise force download
+	isImage := false
+	imageExts := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg"}
+	ext := strings.ToLower(filepath.Ext(filename))
+	for _, imgExt := range imageExts {
+		if ext == imgExt {
+			isImage = true
+			break
+		}
+	}
+
+	if !isImage {
+		// Force download for non-image files
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	}
+	http.ServeFile(w, r, filePath)
+}
+
+func handleUpdateMaxTotalSize(w http.ResponseWriter, r *http.Request) {
+	// Check token authentication
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+	}
+
+	if token != adminToken || adminToken == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		AdminPath     *string `json:"adminPath,omitempty"`
+		NoteNameLen   *int    `json:"noteNameLen,omitempty"`
+		BackupDays    *int    `json:"backupDays,omitempty"`
+		NoteChars     *string `json:"noteChars,omitempty"`
+		MaxFileSize   *string `json:"maxFileSize,omitempty"`
+		MaxPathLength *int    `json:"maxPathLength,omitempty"`
+		MaxTotalSize  *string `json:"maxTotalSize,omitempty"`
+		MaxNoteCount  *int    `json:"maxNoteCount,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	updated := false
+
+	// Update admin path if provided
+	if req.AdminPath != nil && *req.AdminPath != "" {
+		newPath := *req.AdminPath
+		if !strings.HasPrefix(newPath, "/") {
+			newPath = "/" + newPath
+		}
+		adminPath = newPath
+		updated = true
+	}
+
+	// Update note name length if provided
+	if req.NoteNameLen != nil && *req.NoteNameLen > 0 {
+		noteNameLen = *req.NoteNameLen
+		updated = true
+	}
+
+	// Update backup days if provided
+	if req.BackupDays != nil && *req.BackupDays > 0 {
+		backupDays = *req.BackupDays
+		updated = true
+	}
+
+	// Update note chars if provided
+	if req.NoteChars != nil && *req.NoteChars != "" {
+		noteChars = *req.NoteChars
+		updated = true
+	}
+
+	// Update max file size if provided
+	if req.MaxFileSize != nil && *req.MaxFileSize != "" {
+		size, err := parseFileSize(*req.MaxFileSize)
+		if err != nil || size <= 0 {
+			http.Error(w, fmt.Sprintf("Invalid maxFileSize format: %s", *req.MaxFileSize), http.StatusBadRequest)
+			return
+		}
+		maxFileSize = size
+		updated = true
+	}
+
+	// Update max path length if provided
+	if req.MaxPathLength != nil && *req.MaxPathLength > 0 {
+		maxPathLength = *req.MaxPathLength
+		updated = true
+	}
+
+	// Update max total size if provided
+	if req.MaxTotalSize != nil && *req.MaxTotalSize != "" {
+		size, err := parseFileSize(*req.MaxTotalSize)
+		if err != nil || size <= 0 {
+			http.Error(w, fmt.Sprintf("Invalid maxTotalSize format: %s", *req.MaxTotalSize), http.StatusBadRequest)
+			return
+		}
+
+		maxTotalSizeLock.Lock()
+		maxTotalSize = size
+		maxTotalSizeLock.Unlock()
+		updated = true
+	}
+
+	// Update max note count if provided
+	if req.MaxNoteCount != nil && *req.MaxNoteCount > 0 {
+		maxNoteCountLock.Lock()
+		maxNoteCount = *req.MaxNoteCount
+		maxNoteCountLock.Unlock()
+		updated = true
+	}
+
+	// Save config to file
+	if updated {
+		saveConfig()
+	}
+
+	maxTotalSizeLock.RLock()
+	currentMaxTotalSize := maxTotalSize
+	maxTotalSizeLock.RUnlock()
+
+	maxNoteCountLock.RLock()
+	currentMaxNoteCount := maxNoteCount
+	maxNoteCountLock.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":        true,
+		"adminPath":      adminPath,
+		"noteNameLen":    noteNameLen,
+		"backupDays":     backupDays,
+		"noteChars":      noteChars,
+		"maxFileSize":    maxFileSize,
+		"maxPathLength":  maxPathLength,
+		"maxTotalSize":   currentMaxTotalSize,
+		"maxTotalSizeMB": currentMaxTotalSize / (1024 * 1024),
+		"maxNoteCount":   currentMaxNoteCount,
+	})
+}
+
 func main() {
-	// Load token and admin path from command line, environment variable, or .env file
+	// Load configuration from command line, environment variable, or .env file
 	tokenFlag := flag.String("token", "", "Admin access token (required)")
-	adminPathFlag := flag.String("admin-path", "", "Admin panel path (default: /admin)")
+	portFlag := flag.String("port", "", "Server port (default: :8080)")
 	flag.Parse()
 
-	// Try to load from .env file first
-	if err := loadEnvFile(); err != nil {
-		log.Printf("Warning: Failed to load .env file: %v", err)
+	// Get port from: command line > environment variable > default (port is always configurable)
+	if *portFlag != "" {
+		port = *portFlag
+		if !strings.HasPrefix(port, ":") {
+			port = ":" + port
+		}
+	} else if envPort := os.Getenv("PORT"); envPort != "" {
+		port = envPort
+		if !strings.HasPrefix(port, ":") {
+			port = ":" + port
+		}
 	}
 
-	// Get admin path from: command line > environment variable > default
-	if *adminPathFlag != "" {
-		adminPath = *adminPathFlag
-	} else if envPath := os.Getenv("ADMIN_PATH"); envPath != "" {
-		adminPath = envPath
-	}
-	// Ensure admin path starts with /
-	if !strings.HasPrefix(adminPath, "/") {
-		adminPath = "/" + adminPath
+	// Check if config file was loaded
+	// If config file exists, use it and ignore env/command line (except port and token)
+	// If config file doesn't exist, use env/command line and save to config file
+	if !configLoaded {
+		// Config file doesn't exist, load from env/command line
+		// Try to load from .env file first
+		if err := loadEnvFile(); err != nil {
+			log.Printf("Warning: Failed to load .env file: %v", err)
+		}
+
+		// Get admin path from: command line > environment variable > default
+		adminPathFlag := flag.String("admin-path", "", "Admin panel path (default: /admin)")
+		if *adminPathFlag != "" {
+			adminPath = *adminPathFlag
+		} else if envPath := os.Getenv("ADMIN_PATH"); envPath != "" {
+			adminPath = envPath
+		}
+		// Ensure admin path starts with /
+		if !strings.HasPrefix(adminPath, "/") {
+			adminPath = "/" + adminPath
+		}
+
+		// Get note name length from: command line > environment variable > default
+		noteNameLenFlag := flag.Int("note-name-len", 0, "Minimum length for note names (default: 3)")
+		if *noteNameLenFlag > 0 {
+			noteNameLen = *noteNameLenFlag
+		} else if envLen := os.Getenv("NOTE_NAME_LEN"); envLen != "" {
+			if len, err := strconv.Atoi(envLen); err == nil && len > 0 {
+				noteNameLen = len
+			}
+		}
+
+		// Get backup days from: command line > environment variable > default
+		backupDaysFlag := flag.Int("backup-days", 0, "Days before moving notes to backup (default: 7)")
+		if *backupDaysFlag > 0 {
+			backupDays = *backupDaysFlag
+		} else if envDays := os.Getenv("BACKUP_DAYS"); envDays != "" {
+			if days, err := strconv.Atoi(envDays); err == nil && days > 0 {
+				backupDays = days
+			}
+		}
+
+		// Get note characters from: command line > environment variable > default
+		noteCharsFlag := flag.String("note-chars", "", "Characters used for generating note names (default: 0123456789abcdefghijklmnopqrstuvwxyz)")
+		if *noteCharsFlag != "" {
+			noteChars = *noteCharsFlag
+		} else if envChars := os.Getenv("NOTE_CHARS"); envChars != "" {
+			noteChars = envChars
+		}
+
+		// Validate noteChars is not empty
+		if len(noteChars) == 0 {
+			log.Fatal("Error: NOTE_CHARS cannot be empty")
+		}
+
+		// Get max file size from: command line > environment variable > default
+		maxFileSizeFlag := flag.String("max-file-size", "", "Maximum file size (e.g., 10M, 100MB, default: 10MB)")
+		if *maxFileSizeFlag != "" {
+			if size, err := parseFileSize(*maxFileSizeFlag); err == nil && size > 0 {
+				maxFileSize = size
+			} else {
+				log.Fatalf("Error: Invalid max-file-size format: %s. Use format like 10M, 100MB, 1G", *maxFileSizeFlag)
+			}
+		} else if envSize := os.Getenv("MAX_FILE_SIZE"); envSize != "" {
+			if size, err := parseFileSize(envSize); err == nil && size > 0 {
+				maxFileSize = size
+			} else {
+				log.Fatalf("Error: Invalid MAX_FILE_SIZE format: %s. Use format like 10M, 100MB, 1G", envSize)
+			}
+		}
+
+		// Get max path length from: command line > environment variable > default
+		maxPathLengthFlag := flag.Int("max-path-length", 0, "Maximum path/note name length (default: 20)")
+		if *maxPathLengthFlag > 0 {
+			maxPathLength = *maxPathLengthFlag
+		} else if envPathLen := os.Getenv("MAX_PATH_LENGTH"); envPathLen != "" {
+			if pathLen, err := strconv.Atoi(envPathLen); err == nil && pathLen > 0 {
+				maxPathLength = pathLen
+			}
+		}
+
+		// Save config to file after loading from env/command line
+		saveConfig()
+		log.Printf("Configuration loaded from environment/command line and saved to %s", configFile)
+	} else {
+		log.Printf("Configuration loaded from %s (environment variables and command line arguments ignored)", configFile)
 	}
 
-	// Get token from: command line > environment variable > .env file
+	// Get token from: command line > environment variable > config file > .env file
+	// Command line and env always take precedence (for security)
 	if *tokenFlag != "" {
 		adminToken = *tokenFlag
 	} else if envToken := os.Getenv("ADMIN_TOKEN"); envToken != "" {
 		adminToken = envToken
+	} else if configLoaded && adminToken == "" {
+		// If config was loaded but token is still empty, it means config file didn't have token
+		// Try to load from .env file
+		if err := loadEnvFile(); err == nil {
+			if envToken := os.Getenv("ADMIN_TOKEN"); envToken != "" {
+				adminToken = envToken
+			}
+		}
 	}
 
 	// Token is required
 	if adminToken == "" {
-		log.Fatal("Error: Admin token is required. Set it via -token flag, ADMIN_TOKEN environment variable, or ADMIN_TOKEN in .env file")
+		log.Fatal("Error: Admin token is required. Set it via -token flag, ADMIN_TOKEN environment variable, ADMIN_TOKEN in .env file, or adminToken in config.json")
+	}
+
+	// Load existing notes into memory cache
+	if err := loadExistingNotes(); err != nil {
+		log.Printf("Warning: Failed to load existing notes: %v", err)
+	} else {
+		var count int
+		existingNotes.Range(func(key, value interface{}) bool {
+			count++
+			return true
+		})
+		log.Printf("Loaded %d existing notes into memory cache", count)
 	}
 
 	r := mux.NewRouter()
@@ -1384,11 +2845,26 @@ func main() {
 	// Admin routes (must be before /{note} route)
 	r.HandleFunc(adminPath, handleAdmin).Methods("GET")
 
+	// Read-only route (must be before /{note} route)
+	r.HandleFunc("/read/{note}", handleReadNote).Methods("GET")
+
 	// WebSocket route
 	r.HandleFunc("/ws/{note}", handleWebSocket)
 
 	// Markdown render route
 	r.HandleFunc("/api/markdown", handleMarkdownRender).Methods("POST")
+
+	// File upload route
+	r.HandleFunc("/api/upload", handleFileUpload).Methods("POST")
+
+	// File download route
+	r.HandleFunc("/uploads/{filename}", handleFileDownload).Methods("GET")
+
+	// Update max total size route (admin only)
+	r.HandleFunc("/api/max-total-size", handleUpdateMaxTotalSize).Methods("POST")
+
+	// Static file server for uploads
+	r.PathPrefix("/uploads/").Handler(http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadPath))))
 
 	// Note routes (must be after specific routes)
 	r.HandleFunc("/{note}", handleNote).Methods("GET", "POST")

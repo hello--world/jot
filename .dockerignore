@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Build artifacts
+jot
+jot.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.test
+
+# Documentation
+README.md
+*.md
+
+# Config files (will be created at runtime)
+.env
+config.json
+
+# Data directories (will be created at runtime)
+_tmp
+bak
+uploads
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CI/CD
+.github
+

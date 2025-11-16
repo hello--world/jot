@@ -1,3 +1,6 @@
 .env
 _tmp/
 bak/
+.idea/
+config.json
+uploads/
