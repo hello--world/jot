@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -268,6 +267,10 @@ body {
                     <span class="file-info-label">修改:</span>
                     <span class="file-info-value" id="mod-time">{{.ModTime}}</span>
                 </div>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button onclick="toggleLock()" id="lockBtn" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">🔓 设置锁</button>
+                <a href="/" style="padding: 6px 12px; background: #666; color: white; text-decoration: none; border-radius: 4px; font-size: 12px;">新建笔记</a>
             </div>
         </div>
         <textarea id="editor" placeholder="开始输入 Markdown 内容...">{{.Content}}</textarea>
@@ -548,6 +551,59 @@ connectWebSocket();
 
 // Auto-save every 2 seconds
 setInterval(saveNote, 2000);
+
+// Note lock management
+let noteLockToken = '';
+let isLocked = false;
+
+// Check if note is locked on page load
+const rawContent = editor.value;
+if (rawContent.startsWith('<!-- LOCK:')) {
+    const endIdx = rawContent.indexOf(' -->\n');
+    if (endIdx !== -1) {
+        noteLockToken = rawContent.substring('<!-- LOCK:'.length, endIdx);
+        isLocked = true;
+        document.getElementById('lockBtn').textContent = '🔒 移除锁';
+        document.getElementById('lockBtn').style.background = '#e74c3c';
+    }
+}
+
+function toggleLock() {
+    if (isLocked) {
+        // Remove lock
+        if (confirm('确定要移除笔记锁吗？')) {
+            const currentContent = editor.value;
+            const endIdx = currentContent.indexOf(' -->\n');
+            if (endIdx !== -1) {
+                editor.value = currentContent.substring(endIdx + 6); // Remove ' -->\n'
+                isLocked = false;
+                noteLockToken = '';
+                document.getElementById('lockBtn').textContent = '🔓 设置锁';
+                document.getElementById('lockBtn').style.background = '';
+                saveNote();
+            }
+        }
+    } else {
+        // Set lock
+        const token = prompt('请输入解锁令牌（留空取消）:');
+        if (token === null) {
+            return; // User cancelled
+        }
+        if (token.trim() === '') {
+            alert('令牌不能为空');
+            return;
+        }
+        const currentContent = editor.value;
+        if (!currentContent.startsWith('<!-- LOCK:')) {
+            editor.value = '<!-- LOCK:' + token.trim() + ' -->\n' + currentContent;
+            isLocked = true;
+            noteLockToken = token.trim();
+            document.getElementById('lockBtn').textContent = '🔒 移除锁';
+            document.getElementById('lockBtn').style.background = '#e74c3c';
+            saveNote();
+        }
+    }
+}
 </script>
 </body>
 </html>`
@@ -815,6 +871,131 @@ body {
         {{end}}
     </div>
 </div>
+</body>
+</html>`
+
+const noteLockHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>笔记已锁定</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+.container {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    padding: 40px;
+    max-width: 400px;
+    width: 100%;
+}
+h1 {
+    color: #333;
+    margin-bottom: 10px;
+    font-size: 24px;
+}
+.subtitle {
+    color: #666;
+    margin-bottom: 30px;
+    font-size: 14px;
+}
+.form-group {
+    margin-bottom: 20px;
+}
+label {
+    display: block;
+    color: #333;
+    margin-bottom: 8px;
+    font-size: 14px;
+    font-weight: 500;
+}
+input[type="text"] {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #e0e0e0;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+input[type="text"]:focus {
+    outline: none;
+    border-color: #667eea;
+}
+button {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+}
+button:active {
+    transform: translateY(0);
+}
+.error {
+    color: #e74c3c;
+    font-size: 12px;
+    margin-top: 8px;
+    display: none;
+}
+.error.show {
+    display: block;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>🔒 笔记已锁定</h1>
+    <p class="subtitle">此笔记需要解锁令牌才能查看</p>
+    <form id="lockForm" onsubmit="handleLockSubmit(event)">
+        <div class="form-group">
+            <label for="lockToken">解锁令牌</label>
+            <input type="text" id="lockToken" name="lockToken" placeholder="请输入解锁令牌" required autofocus>
+            <div class="error" id="errorMsg"></div>
+        </div>
+        <button type="submit">解锁</button>
+    </form>
+</div>
+<script>
+function handleLockSubmit(event) {
+    event.preventDefault();
+    const token = document.getElementById('lockToken').value.trim();
+    const noteName = '{{.NoteName}}';
+    const errorMsg = document.getElementById('errorMsg');
+    
+    if (!token) {
+        errorMsg.textContent = '请输入解锁令牌';
+        errorMsg.classList.add('show');
+        return;
+    }
+    
+    // Set cookie and redirect
+    document.cookie = 'note_lock_' + noteName + '=' + encodeURIComponent(token) + '; path=/; max-age=86400'; // 24 hours
+    window.location.href = window.location.pathname + '?lock_token=' + encodeURIComponent(token);
+}
+</script>
 </body>
 </html>`
 
@@ -2026,18 +2207,10 @@ func getFileCreationTime(path string) (time.Time, error) {
 	}
 
 	// Windows: 通过 Win32FileAttributeData 获取创建时间
+	// 使用 build tags 来避免在非 Windows 平台上编译错误
 	if runtime.GOOS == "windows" {
-		if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
-			// Windows 文件创建时间是从 1601-01-01 00:00:00 UTC 开始的 100 纳秒间隔
-			// 转换为 Unix 时间
-			ft := sys.CreationTime
-			// 合并高32位和低32位值（使用 uint64 避免溢出）
-			nsec100 := uint64(ft.HighDateTime)<<32 | uint64(ft.LowDateTime)
-			// Windows 纪元: 1601-01-01 00:00:00 UTC = 116444736000000000 (100纳秒间隔)
-			const windowsEpoch100ns = uint64(116444736000000000)
-			// 减去 Windows 纪元并转换为纳秒
-			unixNsec := int64((nsec100 - windowsEpoch100ns) * 100)
-			creationTime := time.Unix(0, unixNsec)
+		creationTime := getFileCreationTimeWindows(info)
+		if !creationTime.IsZero() {
 			return creationTime, nil
 		}
 	}
@@ -2052,6 +2225,9 @@ func getFileCreationTime(path string) (time.Time, error) {
 	// 其他平台或获取失败时，使用修改时间作为近似值
 	return info.ModTime(), nil
 }
+
+// getFileCreationTimeWindows 在 Windows 平台上获取文件创建时间
+// 这个函数的实现位于 windows.go 文件中（使用 build tags）
 
 func saveNote(name, content string) error {
 	path := getNotePath(name)
@@ -2082,6 +2258,57 @@ func loadNote(name string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// Note lock functions
+const lockPrefix = "<!-- LOCK:"
+const lockSuffix = " -->\n"
+
+// hasNoteLock checks if a note has a lock
+func hasNoteLock(content string) bool {
+	return strings.HasPrefix(content, lockPrefix)
+}
+
+// getNoteLockToken extracts the lock token from note content
+// Returns empty string if no lock
+func getNoteLockToken(content string) string {
+	if !hasNoteLock(content) {
+		return ""
+	}
+	// Extract token from <!-- LOCK:token -->
+	endIdx := strings.Index(content, lockSuffix)
+	if endIdx == -1 {
+		return ""
+	}
+	return content[len(lockPrefix):endIdx]
+}
+
+// getNoteContent extracts the actual content from a locked note
+func getNoteContent(content string) string {
+	if !hasNoteLock(content) {
+		return content
+	}
+	// Remove <!-- LOCK:token -->\n prefix
+	endIdx := strings.Index(content, lockSuffix)
+	if endIdx == -1 {
+		return content
+	}
+	return content[endIdx+len(lockSuffix):]
+}
+
+// setNoteLock adds a lock to note content
+func setNoteLock(content, token string) string {
+	if token == "" {
+		// Remove lock if token is empty
+		return getNoteContent(content)
+	}
+	// If already locked, replace the token
+	if hasNoteLock(content) {
+		actualContent := getNoteContent(content)
+		return lockPrefix + token + lockSuffix + actualContent
+	}
+	// Add new lock
+	return lockPrefix + token + lockSuffix + content
 }
 
 func getAllNotes() ([]Note, error) {
@@ -2266,13 +2493,55 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
+			// Check note lock for raw requests
+			if hasNoteLock(content) {
+				lockToken := getNoteLockToken(content)
+				providedToken := r.URL.Query().Get("lock_token")
+				if providedToken == "" {
+					authHeader := r.Header.Get("Authorization")
+					if strings.HasPrefix(authHeader, "Bearer ") {
+						providedToken = strings.TrimPrefix(authHeader, "Bearer ")
+					}
+				}
+				if providedToken != lockToken {
+					http.Error(w, "Unauthorized: Note is locked. Provide lock_token parameter or Authorization header.", http.StatusUnauthorized)
+					return
+				}
+				content = getNoteContent(content)
+			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Write([]byte(content))
 			return
 		}
 
 		// Serve HTML page
-		content, _ := loadNote(noteName)
+		rawContent, _ := loadNote(noteName)
+
+		// Check note lock
+		if hasNoteLock(rawContent) {
+			lockToken := getNoteLockToken(rawContent)
+			providedToken := r.URL.Query().Get("lock_token")
+			if providedToken == "" {
+				// Try to get from cookie
+				cookie, err := r.Cookie("note_lock_" + noteName)
+				if err == nil {
+					providedToken = cookie.Value
+				}
+			}
+			if providedToken != lockToken {
+				// Show lock login page
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				tmpl := template.Must(template.New("lock").Parse(noteLockHTML))
+				tmpl.Execute(w, map[string]interface{}{
+					"NoteName": noteName,
+				})
+				return
+			}
+			// Token is correct, extract actual content
+			rawContent = getNoteContent(rawContent)
+		}
+
+		content := rawContent
 
 		// 获取文件信息（大小和修改时间）
 		var fileSize int64
@@ -2306,6 +2575,17 @@ func handleNote(w http.ResponseWriter, r *http.Request) {
 			"ModTime":    modTime.Format("2006-01-02 15:04:05"),
 			"CreateTime": createTime.Format("2006-01-02 15:04:05"),
 		})
+
+		// Set cookie if token was provided
+		if lockToken := r.URL.Query().Get("lock_token"); lockToken != "" {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "note_lock_" + noteName,
+				Value:    lockToken,
+				Path:     "/",
+				MaxAge:   86400, // 24 hours
+				HttpOnly: false,
+			})
+		}
 		return
 	}
 
@@ -2416,11 +2696,37 @@ func handleReadNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load note content
-	content, err := loadNote(noteName)
+	rawContent, err := loadNote(noteName)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+
+	// Check note lock
+	if hasNoteLock(rawContent) {
+		lockToken := getNoteLockToken(rawContent)
+		providedToken := r.URL.Query().Get("lock_token")
+		if providedToken == "" {
+			// Try to get from cookie
+			cookie, err := r.Cookie("note_lock_" + noteName)
+			if err == nil {
+				providedToken = cookie.Value
+			}
+		}
+		if providedToken != lockToken {
+			// Show lock login page
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			tmpl := template.Must(template.New("lock").Parse(noteLockHTML))
+			tmpl.Execute(w, map[string]interface{}{
+				"NoteName": noteName,
+			})
+			return
+		}
+		// Token is correct, extract actual content
+		rawContent = getNoteContent(rawContent)
+	}
+
+	content := rawContent
 
 	// 获取文件信息（大小和修改时间）
 	var fileSize int64
