@@ -58,14 +58,16 @@ body {
     gap: 10px;
 }
 .btn {
-    padding: 8px 16px;
+    padding: 10px 18px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 13px;
+    font-weight: 500;
     cursor: pointer;
     text-decoration: none;
     display: inline-block;
     transition: all 0.2s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 .btn-primary {
     background: #0066cc;
@@ -73,6 +75,12 @@ body {
 }
 .btn-primary:hover {
     background: #0052a3;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,102,204,0.2);
+}
+.btn-primary:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 .btn-secondary {
     background: #f5f5f5;
@@ -81,6 +89,8 @@ body {
 }
 .btn-secondary:hover {
     background: #e9e9e9;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 .content {
     padding: 30px;
@@ -247,8 +257,8 @@ body {
             </div>
         </div>
         <div class="header-actions">
-            <a href="/{{.NoteName}}" class="btn btn-primary">编辑</a>
-            <a href="/" class="btn btn-secondary">新建笔记</a>
+            <button onclick="copyShareUrl()" class="btn btn-primary">复制访问地址</button>
+            <button onclick="copyRawUrl()" class="btn btn-primary" style="background: #17a2b8;">复制下载地址</button>
         </div>
     </div>
     <div class="content">
@@ -258,11 +268,108 @@ body {
         <div class="empty">
             <div class="empty-icon">📄</div>
             <p>笔记为空</p>
-            <a href="/{{.NoteName}}" class="btn btn-primary" style="margin-top: 20px;">开始编辑</a>
         </div>
         {{end}}
     </div>
 </div>
+<script>
+// Get note name from URL
+const noteName = '{{.NoteName}}';
+
+// Get lock token from URL or cookie
+function getLockToken() {
+    const urlParams = new URLSearchParams(window.location.search);
+    let lockToken = urlParams.get('lock_token');
+    if (!lockToken) {
+        // Try to get from cookie
+        const cookies = document.cookie.split(';');
+        for (let cookie of cookies) {
+            const [name, value] = cookie.trim().split('=');
+            if (name === 'note_lock_' + noteName && value) {
+                lockToken = decodeURIComponent(value);
+                break;
+            }
+        }
+    }
+    return lockToken || '';
+}
+
+// Copy share URL (read page)
+function copyShareUrl() {
+    let shareUrl = window.location.origin + '/read/' + noteName;
+    
+    // Add lock token if note is locked
+    const lockToken = getLockToken();
+    if (lockToken) {
+        shareUrl += '?lock_token=' + encodeURIComponent(lockToken);
+    }
+    
+    copyToClipboard(shareUrl);
+    showStatus('访问地址已复制到剪贴板');
+}
+
+// Copy raw download URL
+function copyRawUrl() {
+    let rawUrl = window.location.origin + '/read/' + noteName + '?raw=1';
+    
+    // Add lock token if note is locked (笔记锁的 token)
+    // /read 路径不需要 access token，只需要笔记的 lock_token
+    const lockToken = getLockToken();
+    if (lockToken) {
+        rawUrl += '&lock_token=' + encodeURIComponent(lockToken);
+    }
+    
+    copyToClipboard(rawUrl);
+    showStatus('下载地址已复制到剪贴板');
+}
+
+// Copy text to clipboard
+function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(err => {
+            console.error('复制失败:', err);
+            fallbackCopyToClipboard(text);
+        });
+    } else {
+        fallbackCopyToClipboard(text);
+    }
+}
+
+// Fallback copy method
+function fallbackCopyToClipboard(text) {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+        document.execCommand('copy');
+    } catch (err) {
+        console.error('复制失败:', err);
+    }
+    document.body.removeChild(textArea);
+}
+
+// Show status message
+function showStatus(message) {
+    // Create or get status element
+    let status = document.getElementById('status-message');
+    if (!status) {
+        status = document.createElement('div');
+        status.id = 'status-message';
+        status.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #4caf50; color: white; padding: 12px 20px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); z-index: 1000; font-size: 14px;';
+        document.body.appendChild(status);
+    }
+    status.textContent = message;
+    status.style.display = 'block';
+    setTimeout(() => {
+        status.style.display = 'none';
+    }, 2000);
+}
+</script>
 </body>
 </html>`
 

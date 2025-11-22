@@ -128,7 +128,7 @@ body {
         <h1>🔐 管理后台登录</h1>
         <p>请输入访问令牌</p>
     </div>
-    <form class="login-form" id="loginForm" method="GET">
+    <form class="login-form" id="loginForm">
         <div class="form-group">
             <label for="token">访问令牌</label>
             <input type="password" id="token" name="token" placeholder="输入访问令牌" required autofocus>
@@ -151,15 +151,46 @@ if (urlParams.get('error') === 'invalid') {
 }
 
 form.addEventListener('submit', function(e) {
+    e.preventDefault();
     const token = tokenInput.value.trim();
     if (!token) {
-        e.preventDefault();
         errorMessage.textContent = '请输入访问令牌';
         errorMessage.classList.add('show');
         tokenInput.focus();
         return false;
     }
-    // Form will submit with token in URL, backend will create session and redirect
+    
+    // 隐藏错误信息
+    errorMessage.classList.remove('show');
+    
+    // 通过 fetch 发送请求，token 放在 Authorization header 中
+    fetch(window.location.pathname, {
+        method: 'GET',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        },
+        credentials: 'include', // 包含 cookies
+        redirect: 'follow' // 跟随重定向
+    })
+    .then(response => {
+        // fetch 会自动跟随重定向，如果最终返回 200，说明登录成功
+        if (response.ok) {
+            // 登录成功，刷新页面（现在有 session cookie 了）
+            window.location.href = window.location.pathname;
+        } else {
+            // 登录失败
+            errorMessage.textContent = '令牌无效，请重试';
+            errorMessage.classList.add('show');
+            tokenInput.focus();
+        }
+    })
+    .catch(err => {
+        console.error('Login error:', err);
+        errorMessage.textContent = '登录失败，请重试';
+        errorMessage.classList.add('show');
+    });
+    
+    return false;
 });
 </script>
 </body>

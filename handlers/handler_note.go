@@ -109,6 +109,7 @@ func handleNoteGet(w http.ResponseWriter, r *http.Request, noteName string) {
 	var modTime time.Time
 	var createTime time.Time
 	notePath := deps.GetNotePath(noteName)
+	now := time.Now()
 
 	if info, err := os.Stat(notePath); err == nil {
 		fileSize = info.Size()
@@ -120,6 +121,10 @@ func handleNoteGet(w http.ResponseWriter, r *http.Request, noteName string) {
 			// 如果无法获取创建时间，回退到修改时间
 			createTime = modTime
 		}
+	} else {
+		// 文件不存在（新建笔记），使用当前时间
+		modTime = now
+		createTime = now
 	}
 
 	// Format size
@@ -252,12 +257,35 @@ func HandleReadNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check note lock
+	// 检查是否是 raw 请求（下载原始内容）
+	isRawRequest := r.URL.Query().Get("raw") != ""
+
+	// 如果是 raw 请求，直接返回原始文件内容（不带锁标记）
+	if isRawRequest {
+		// Check note lock
+		if deps.HasNoteLock(rawContent) {
+			lockToken := deps.GetNoteLockToken(rawContent)
+			providedToken := deps.GetLockTokenFromRequest(r, noteName)
+			if providedToken != lockToken {
+				// Token 不正确，返回错误
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				http.Error(w, "Unauthorized: Note is locked. Provide correct lock_token parameter.", http.StatusUnauthorized)
+				return
+			}
+			// Token is correct, extract actual content (remove lock marker)
+			rawContent = deps.GetNoteContent(rawContent)
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte(rawContent))
+		return
+	}
+
+	// 非 raw 请求，检查锁
 	if deps.HasNoteLock(rawContent) {
 		lockToken := deps.GetNoteLockToken(rawContent)
 		providedToken := deps.GetLockTokenFromRequest(r, noteName)
 		if providedToken != lockToken {
-			// Show lock login page
+			// 显示 HTML 锁登录页面
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			tmpl := template.Must(template.New("lock").Parse(htmlPage.NoteLockHTML))
 			tmpl.Execute(w, map[string]interface{}{
@@ -265,15 +293,8 @@ func HandleReadNote(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Token is correct, extract actual content
+		// Token is correct, extract actual content (remove lock marker)
 		rawContent = deps.GetNoteContent(rawContent)
-	}
-
-	// 检查是否是 raw 请求（下载原始内容）
-	if r.URL.Query().Get("raw") != "" {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte(rawContent))
-		return
 	}
 
 	content := rawContent

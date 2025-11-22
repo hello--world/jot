@@ -53,6 +53,7 @@ body {
     display: flex;
     align-items: center;
     gap: 5px;
+    white-space: nowrap;
 }
 .file-info-label {
     color: #999;
@@ -69,13 +70,13 @@ body {
     text-decoration: underline;
 }
 .header-btn {
-    padding: 6px 10px;
+    padding: 8px 14px;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 11px;
-    line-height: 1.3;
+    font-size: 12px;
+    line-height: 1.4;
     text-align: center;
     transition: all 0.2s;
     white-space: nowrap;
@@ -83,16 +84,23 @@ body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-width: 50px;
-    height: 40px;
+    min-width: 60px;
+    height: 50px;
+    font-weight: 500;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 .header-btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    opacity: 0.9;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    opacity: 0.95;
 }
 .header-btn:active {
     transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+.header-btn br {
+    line-height: 1.2;
+    margin: 2px 0;
 }
 #editor {
     flex: 1;
@@ -254,10 +262,6 @@ body {
                 </div>
             </div>
             <div style="display: flex; gap: 8px; align-items: center;">
-                <button onclick="shareNote()" class="header-btn" style="background: #28a745;">🔗<br>分享</button>
-                <button onclick="copyRawUrl()" class="header-btn" style="background: #17a2b8;">📋<br>复制下载地址</button>
-                <button onclick="toggleLock()" id="lockBtn" class="header-btn" style="background: #0066cc;">🔓<br>设置锁</button>
-                <a href="/" class="header-btn" style="background: #666; text-decoration: none;">📝<br>新建笔记</a>
             </div>
         </div>
         <textarea id="editor" placeholder="开始输入 Markdown 内容...">{{.Content}}</textarea>
@@ -265,7 +269,11 @@ body {
     <div class="preview-panel">
         <div class="panel-header">
             <span></span>
-            <span id="connection-status">连接中</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button onclick="shareNote()" class="header-btn" style="background: #28a745;">🔗<br>复制地址</button>
+                <button onclick="copyRawUrl()" class="header-btn" style="background: #17a2b8;">📋<br>下载地址</button>
+                <span id="connection-status">连接中</span>
+            </div>
         </div>
         <div id="preview"></div>
     </div>
@@ -418,14 +426,42 @@ const fileInput = document.getElementById('file-input');
 const uploadSelectBtn = document.getElementById('upload-select-btn');
 const uploadCloseBtn = document.getElementById('upload-close-btn');
 
-// Upload button (floating button)
+// Floating action buttons container
+const floatingActions = document.createElement('div');
+floatingActions.style.cssText = 'position: fixed; bottom: 20px; left: 20px; display: flex; gap: 10px; align-items: center; z-index: 100; flex-wrap: wrap;';
+
+// Upload button
 const uploadFloatingBtn = document.createElement('button');
 uploadFloatingBtn.innerHTML = '📤 上传';
-uploadFloatingBtn.style.cssText = 'position: fixed; bottom: 20px; left: 20px; padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 25px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 10px rgba(0,102,204,0.3); z-index: 100; transition: all 0.3s;';
-uploadFloatingBtn.onmouseover = function() { uploadFloatingBtn.style.transform = 'scale(1.05)'; uploadFloatingBtn.style.boxShadow = '0 4px 15px rgba(0,102,204,0.4)'; };
-uploadFloatingBtn.onmouseout = function() { uploadFloatingBtn.style.transform = 'scale(1)'; uploadFloatingBtn.style.boxShadow = '0 2px 10px rgba(0,102,204,0.3)'; };
+uploadFloatingBtn.className = 'floating-btn';
+uploadFloatingBtn.style.cssText = 'padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,102,204,0.3); transition: all 0.2s;';
+uploadFloatingBtn.onmouseover = function() { uploadFloatingBtn.style.transform = 'translateY(-2px)'; uploadFloatingBtn.style.boxShadow = '0 4px 12px rgba(0,102,204,0.4)'; };
+uploadFloatingBtn.onmouseout = function() { uploadFloatingBtn.style.transform = 'translateY(0)'; uploadFloatingBtn.style.boxShadow = '0 2px 8px rgba(0,102,204,0.3)'; };
 uploadFloatingBtn.onclick = function() { uploadWindow.style.display = 'block'; };
-document.body.appendChild(uploadFloatingBtn);
+
+// Lock button
+const lockBtn = document.createElement('button');
+lockBtn.id = 'lockBtn';
+lockBtn.innerHTML = '🔓 设置锁';
+lockBtn.className = 'floating-btn';
+lockBtn.style.cssText = 'padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,102,204,0.3); transition: all 0.2s;';
+lockBtn.onmouseover = function() { lockBtn.style.transform = 'translateY(-2px)'; lockBtn.style.boxShadow = '0 4px 12px rgba(0,102,204,0.4)'; };
+lockBtn.onmouseout = function() { lockBtn.style.transform = 'translateY(0)'; lockBtn.style.boxShadow = '0 2px 8px rgba(0,102,204,0.3)'; };
+lockBtn.onclick = function() { toggleLock(); };
+
+// New note button
+const newNoteBtn = document.createElement('a');
+newNoteBtn.href = '/';
+newNoteBtn.innerHTML = '📝 新建笔记';
+newNoteBtn.className = 'floating-btn';
+newNoteBtn.style.cssText = 'padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,102,204,0.3); transition: all 0.2s; text-decoration: none; display: inline-block;';
+newNoteBtn.onmouseover = function() { newNoteBtn.style.transform = 'translateY(-2px)'; newNoteBtn.style.boxShadow = '0 4px 12px rgba(0,102,204,0.4)'; };
+newNoteBtn.onmouseout = function() { newNoteBtn.style.transform = 'translateY(0)'; newNoteBtn.style.boxShadow = '0 2px 8px rgba(0,102,204,0.3)'; };
+
+floatingActions.appendChild(uploadFloatingBtn);
+floatingActions.appendChild(lockBtn);
+floatingActions.appendChild(newNoteBtn);
+document.body.appendChild(floatingActions);
 
 uploadSelectBtn.addEventListener('click', () => {
     fileInput.click();
@@ -598,9 +634,9 @@ function shareNote() {
         shareUrl += '?lock_token=' + encodeURIComponent(lockToken);
     }
     
-    // Copy URL only
+    // Copy share URL
     copyToClipboard(shareUrl);
-    showStatus('链接已复制到剪贴板', false);
+    showStatus('地址已复制到剪贴板', false);
 }
 
 // Copy raw download URL function - for downloading original content
@@ -617,7 +653,7 @@ function copyRawUrl() {
     }
     
     copyToClipboard(rawUrl);
-    showStatus('原始下载地址已复制到剪贴板', false);
+    showStatus('下载地址已复制到剪贴板', false);
 }
 
 // Copy text to clipboard
@@ -651,6 +687,7 @@ function fallbackCopyToClipboard(text) {
 }
 
 function toggleLock() {
+    const lockBtn = document.getElementById('lockBtn');
     if (isLocked) {
         // Remove lock
         if (confirm('确定要移除笔记锁吗？')) {
@@ -660,8 +697,10 @@ function toggleLock() {
                 editor.value = currentContent.substring(endIdx + 6); // Remove ' -->\n'
                 isLocked = false;
                 noteLockToken = '';
-                document.getElementById('lockBtn').textContent = '🔓 设置锁';
-                document.getElementById('lockBtn').style.background = '#0066cc';
+                if (lockBtn) {
+                    lockBtn.textContent = '🔓 设置锁';
+                    lockBtn.style.background = '#0066cc';
+                }
                 saveNote();
             }
         }
@@ -680,8 +719,10 @@ function toggleLock() {
             editor.value = '<!-- LOCK:' + token.trim() + ' -->\n' + currentContent;
             isLocked = true;
             noteLockToken = token.trim();
-            document.getElementById('lockBtn').textContent = '🔒 移除锁';
-            document.getElementById('lockBtn').style.background = '#e74c3c';
+            if (lockBtn) {
+                lockBtn.textContent = '🔒 移除锁';
+                lockBtn.style.background = '#e74c3c';
+            }
             saveNote();
         }
     }

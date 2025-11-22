@@ -43,7 +43,15 @@ func HandleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 如果没有 session token，检查是否是登录请求（使用原始 admin token）
-	adminToken := deps.GetTokenFromRequest(r)
+	// Admin token 只从 Authorization header 中读取，不从 URL 或 cookie 中读取
+	adminToken := ""
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		adminToken = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if authHeader != "" {
+		adminToken = authHeader
+	}
+	adminToken = strings.TrimSpace(adminToken)
 
 	// 如果没有提供 token，显示登录页面
 	if adminToken == "" {

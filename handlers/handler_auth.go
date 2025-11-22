@@ -45,5 +45,6 @@ func GetLockTokenFromRequest(r *http.Request, noteName string) string {
 			token = strings.TrimPrefix(authHeader, "Bearer ")
 		}
 	}
-	return token
+	// 去除首尾空格
+	return strings.TrimSpace(token)
 }
