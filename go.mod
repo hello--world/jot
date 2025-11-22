@@ -1,4 +1,4 @@
-module minimalist-web-notepad
+module github.com/hello--world/jot
 
 go 1.21
 

@@ -1,7 +1,7 @@
 //go:build windows
 // +build windows
 
-package main
+package utils
 
 import (
 	"os"
@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// getFileCreationTimeWindows 在 Windows 平台上获取文件创建时间
-func getFileCreationTimeWindows(info os.FileInfo) time.Time {
+// GetFileCreationTimeWindows 在 Windows 平台上获取文件创建时间
+func GetFileCreationTimeWindows(info os.FileInfo) time.Time {
 	if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
 		// Windows 文件创建时间是从 1601-01-01 00:00:00 UTC 开始的 100 纳秒间隔
 		// 转换为 Unix 时间
