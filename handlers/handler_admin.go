@@ -140,6 +140,72 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, sessionToken string)
 	// Get current values for display
 	currentMaxFileSizeMB := int(deps.GetMaxFileSize() / (1024 * 1024))
 
+	// 按日期分组笔记
+	type NotesByDate struct {
+		Date  string // 日期（格式：YYYY-MM-DD）
+		Notes []Note
+	}
+
+	groupNotesByDate := func(notes []Note) []NotesByDate {
+		dateMap := make(map[string][]Note)
+		for _, note := range notes {
+			dateDir := note.DateDir
+			if dateDir == "" {
+				// 如果没有日期目录，使用更新时间的日期
+				dateDir = note.UpdatedAt.Format("20060102")
+			}
+			// 格式化日期为 YYYY-MM-DD
+			if len(dateDir) == 8 {
+				dateStr := dateDir[:4] + "-" + dateDir[4:6] + "-" + dateDir[6:8]
+				dateMap[dateStr] = append(dateMap[dateStr], note)
+			}
+		}
+
+		// 转换为切片并按日期倒序排序
+		grouped := make([]NotesByDate, 0, len(dateMap))
+		for date, notes := range dateMap {
+			grouped = append(grouped, NotesByDate{
+				Date:  date,
+				Notes: notes,
+			})
+		}
+
+		// 按日期倒序排序
+		for i := 0; i < len(grouped)-1; i++ {
+			for j := i + 1; j < len(grouped); j++ {
+				if grouped[i].Date < grouped[j].Date {
+					grouped[i], grouped[j] = grouped[j], grouped[i]
+				}
+			}
+		}
+
+		return grouped
+	}
+
+	groupedNotes := groupNotesByDate(notes)
+	groupedBackupNotes := groupNotesByDate(backupNotes)
+
+	// 获取所有日期用于过滤
+	allDates := make(map[string]bool)
+	for _, group := range groupedNotes {
+		allDates[group.Date] = true
+	}
+	for _, group := range groupedBackupNotes {
+		allDates[group.Date] = true
+	}
+	dateList := make([]string, 0, len(allDates))
+	for date := range allDates {
+		dateList = append(dateList, date)
+	}
+	// 按日期倒序排序
+	for i := 0; i < len(dateList)-1; i++ {
+		for j := i + 1; j < len(dateList); j++ {
+			if dateList[i] < dateList[j] {
+				dateList[i], dateList[j] = dateList[j], dateList[i]
+			}
+		}
+	}
+
 	// Prepare template functions
 	funcMap := template.FuncMap{
 		"formatSize": func(size int64) string {
@@ -167,23 +233,26 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, sessionToken string)
 
 	tmpl := template.Must(template.New("admin").Funcs(funcMap).Parse(htmlPage.AdminPageHTML))
 	tmpl.Execute(w, map[string]interface{}{
-		"Notes":            notes,
-		"BackupNotes":      backupNotes,
-		"TotalSize":        totalSize,
-		"BackupTotalSize":  backupTotalSize,
-		"TotalCount":       len(notes),
-		"BackupCount":      len(backupNotes),
-		"CurrentTotalSize": currentTotalSize,
-		"MaxTotalSize":     currentMaxTotalSize,
-		"MaxNoteCount":     currentMaxNoteCount,
-		"AdminPath":        deps.AdminPath,
-		"NoteNameLen":      deps.GetNoteNameLen(),
-		"BackupDays":       deps.GetBackupDays(),
-		"NoteChars":        deps.GetNoteChars(),
-		"MaxFileSize":      deps.GetMaxFileSize(),
-		"MaxFileSizeMB":    currentMaxFileSizeMB,
-		"MaxPathLength":    deps.GetMaxPathLength(),
-		"AccessToken":      deps.AccessToken,
+		"Notes":              notes,
+		"BackupNotes":        backupNotes,
+		"GroupedNotes":       groupedNotes,
+		"GroupedBackupNotes": groupedBackupNotes,
+		"DateList":           dateList,
+		"TotalSize":          totalSize,
+		"BackupTotalSize":    backupTotalSize,
+		"TotalCount":         len(notes),
+		"BackupCount":        len(backupNotes),
+		"CurrentTotalSize":   currentTotalSize,
+		"MaxTotalSize":       currentMaxTotalSize,
+		"MaxNoteCount":       currentMaxNoteCount,
+		"AdminPath":          deps.AdminPath,
+		"NoteNameLen":        deps.GetNoteNameLen(),
+		"BackupDays":         deps.GetBackupDays(),
+		"NoteChars":          deps.GetNoteChars(),
+		"MaxFileSize":        deps.GetMaxFileSize(),
+		"MaxFileSizeMB":      currentMaxFileSizeMB,
+		"MaxPathLength":      deps.GetMaxPathLength(),
+		"AccessToken":        deps.AccessToken,
 	})
 }
 

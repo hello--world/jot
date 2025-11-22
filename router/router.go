@@ -67,13 +67,14 @@ func SetupRoutes() *mux.Router {
 	// File upload route
 	r.HandleFunc("/api/upload", handlers.HandleFileUpload).Methods("POST")
 
-	// File download route
-	r.HandleFunc("/uploads/{filename}", handlers.HandleFileDownload).Methods("GET")
+	// File download route with date directory: /uploads/{date}/{filename}
+	r.HandleFunc("/uploads/{date}/{filename}", handlers.HandleFileDownload).Methods("GET")
 
 	// Update max total size route (admin only)
 	r.HandleFunc("/api/max-total-size", handlers.HandleUpdateMaxTotalSize).Methods("POST")
 
 	// Static file server for uploads (需要 access token 验证)
+	// Support both old format (without date) and new format (with date)
 	uploadsHandler := http.StripPrefix("/uploads/", http.FileServer(http.Dir(config.UploadPath)))
 	r.PathPrefix("/uploads/").Handler(requireAccessToken(uploadsHandler, config.GetAccessToken))
 

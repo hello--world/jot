@@ -66,28 +66,32 @@ func HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate unique filename
-	filename := handler.Filename
+	// Generate unique filename with date directory
+	now := time.Now()
+	dateDir := now.Format("20060102")
+	timestamp := now.UnixNano()
+
+	originalFilename := handler.Filename
 	// Sanitize filename
-	filename = filepath.Base(filename)
-	if filename == "" || filename == "." || filename == ".." {
-		filename = "upload_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	originalFilename = filepath.Base(originalFilename)
+	if originalFilename == "" || originalFilename == "." || originalFilename == ".." {
+		originalFilename = "upload"
 	}
 
-	// Check if file already exists, add suffix if needed
-	uploadFilePath := filepath.Join(deps.GetUploadPath(), filename)
-	counter := 1
-	originalFilename := filename
-	for {
-		if _, err := os.Stat(uploadFilePath); os.IsNotExist(err) {
-			break
-		}
-		ext := filepath.Ext(originalFilename)
-		name := strings.TrimSuffix(originalFilename, ext)
-		filename = fmt.Sprintf("%s_%d%s", name, counter, ext)
-		uploadFilePath = filepath.Join(deps.GetUploadPath(), filename)
-		counter++
+	// Generate filename: timestamp-originalFilename
+	ext := filepath.Ext(originalFilename)
+	name := strings.TrimSuffix(originalFilename, ext)
+	filename := fmt.Sprintf("%d-%s%s", timestamp, name, ext)
+
+	// Create date directory: upload/YYYYMMDD/
+	dateUploadPath := filepath.Join(deps.GetUploadPath(), dateDir)
+	if err := os.MkdirAll(dateUploadPath, 0755); err != nil {
+		http.Error(w, "Error creating upload directory: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+
+	// Full path: upload/YYYYMMDD/timestamp-filename
+	uploadFilePath := filepath.Join(dateUploadPath, filename)
 
 	// Create file
 	dst, err := os.Create(uploadFilePath)
@@ -107,16 +111,16 @@ func HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	// Determine if it's an image
 	isImage := false
 	imageExts := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg"}
-	ext := strings.ToLower(filepath.Ext(filename))
+	fileExt := strings.ToLower(filepath.Ext(filename))
 	for _, imgExt := range imageExts {
-		if ext == imgExt {
+		if fileExt == imgExt {
 			isImage = true
 			break
 		}
 	}
 
-	// Return markdown format
-	fileURL := "/uploads/" + filename
+	// Return markdown format (URL includes date directory)
+	fileURL := fmt.Sprintf("/uploads/%s/%s", dateDir, filename)
 	var markdown string
 	if isImage {
 		markdown = fmt.Sprintf("![%s](%s)", filename, fileURL)
@@ -145,6 +149,7 @@ func HandleFileDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vars := mux.Vars(r)
+	dateDir := vars["date"]
 	filename := vars["filename"]
 
 	// Security check: prevent path traversal
@@ -152,8 +157,13 @@ func HandleFileDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
+	if strings.Contains(dateDir, "..") || strings.Contains(dateDir, "/") || strings.Contains(dateDir, "\\") {
+		http.Error(w, "Invalid date directory", http.StatusBadRequest)
+		return
+	}
 
-	filePath := filepath.Join(deps.GetUploadPath(), filename)
+	// File path: upload/YYYYMMDD/filename
+	filePath := filepath.Join(deps.GetUploadPath(), dateDir, filename)
 
 	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {

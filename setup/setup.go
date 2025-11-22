@@ -225,6 +225,7 @@ type HandlerInitializer struct {
 	GenerateNoteName    func() string
 	IsSafeNoteName      func(string) bool
 	GetNotePath         func(string) string
+	FindNotePath        func(string) (string, error)
 	IsNoteExists        func(string) bool
 	GetFileCreationTime func(string) (time.Time, error)
 
@@ -324,6 +325,7 @@ func InitHandlers() {
 		GenerateNoteName:    initializer.GenerateNoteName,
 		IsSafeNoteName:      initializer.IsSafeNoteName,
 		GetNotePath:         initializer.GetNotePath,
+		FindNotePath:        initializer.FindNotePath,
 		IsNoteExists:        initializer.IsNoteExists,
 		GetFileCreationTime: initializer.GetFileCreationTime,
 

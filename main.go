@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/hello--world/jot/backup"
 	"github.com/hello--world/jot/config"
 	"github.com/hello--world/jot/handlers"
 	"github.com/hello--world/jot/note"
@@ -34,6 +35,8 @@ func convertNoteToHandlerNote(n note.Note) handlers.Note {
 		Content:   n.Content,
 		UpdatedAt: n.UpdatedAt,
 		Size:      n.Size,
+		DateDir:   n.DateDir,
+		IsBackup:  n.IsBackup,
 	}
 }
 
@@ -109,6 +112,7 @@ func initHandlerInitializer() {
 		GenerateNoteName:    func() string { return noteManager.GenerateNoteName() },
 		IsSafeNoteName:      func(name string) bool { return noteManager.IsSafeNoteName(name) },
 		GetNotePath:         func(name string) string { return noteManager.GetNotePath(name) },
+		FindNotePath:        func(name string) (string, error) { return noteManager.FindNotePath(name) },
 		IsNoteExists:        func(name string) bool { return noteManager.IsNoteExists(name) },
 		GetFileCreationTime: func(path string) (time.Time, error) { return utils.GetFileCreationTime(path) },
 		HasNoteLock:         func(content string) bool { return note.HasNoteLock(content) },
@@ -215,6 +219,10 @@ func main() {
 	}
 	router.InitRouter(routerConfig)
 	r := router.SetupRoutes()
+
+	// 初始化备份管理器并启动备份调度器
+	backupManager := backup.NewManager(noteManager)
+	backupManager.StartBackupScheduler()
 
 	fmt.Printf("Server starting on http://localhost%s\n", v.Port)
 	fmt.Printf("Admin panel: http://localhost%s%s\n", v.Port, v.AdminPath)

@@ -211,62 +211,64 @@ const AdminPageHTML = `<!DOCTYPE html>
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     background: #ebeef1;
-    padding: 20px;
+    padding: 10px;
 }
 .container {
     max-width: 1200px;
     margin: 0 auto;
     background: #fff;
-    border-radius: 8px;
+    border-radius: 6px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     overflow: hidden;
 }
 .header {
     background: #0066cc;
     color: white;
-    padding: 20px;
+    padding: 12px 16px;
     display: flex;
     justify-content: space-between;
     align-items: center;
 }
 .header h1 {
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 500;
 }
 .header a {
     color: white;
     text-decoration: none;
-    padding: 8px 16px;
+    padding: 6px 12px;
     background: rgba(255,255,255,0.2);
     border-radius: 4px;
     transition: background 0.2s;
+    font-size: 13px;
 }
 .header a:hover {
     background: rgba(255,255,255,0.3);
 }
 .stats {
-    padding: 20px;
+    padding: 12px 16px;
     background: #f5f5f5;
     border-bottom: 1px solid #ddd;
     display: flex;
-    gap: 30px;
+    gap: 20px;
+    flex-wrap: wrap;
 }
 .stat-item {
     display: flex;
     flex-direction: column;
 }
 .stat-label {
-    font-size: 12px;
+    font-size: 11px;
     color: #666;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 .stat-value {
-    font-size: 24px;
+    font-size: 18px;
     font-weight: 600;
     color: #333;
 }
 .notes-list {
-    padding: 20px;
+    padding: 12px 16px;
 }
 .notes-table {
     width: 100%;
@@ -274,15 +276,17 @@ body {
 }
 .notes-table th {
     background: #f5f5f5;
-    padding: 12px;
+    padding: 8px 10px;
     text-align: left;
     font-weight: 600;
     color: #333;
     border-bottom: 2px solid #ddd;
+    font-size: 13px;
 }
 .notes-table td {
-    padding: 12px;
+    padding: 8px 10px;
     border-bottom: 1px solid #eee;
+    font-size: 13px;
 }
 .notes-table tr:hover {
     background: #f9f9f9;
@@ -322,18 +326,18 @@ body {
 }
 .tabs {
     display: flex;
-    gap: 10px;
-    padding: 20px;
+    gap: 8px;
+    padding: 10px 16px;
     background: #f5f5f5;
     border-bottom: 1px solid #ddd;
 }
 .tab-button {
-    padding: 10px 20px;
+    padding: 6px 14px;
     background: #fff;
     border: 1px solid #ddd;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
     color: #666;
     transition: all 0.2s;
@@ -348,6 +352,32 @@ body {
 }
 .tab-content {
     display: block;
+}
+.sub-tabs {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    background: #f9f9f9;
+    border-bottom: 1px solid #ddd;
+}
+.sub-tab-button {
+    padding: 6px 14px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: #666;
+    transition: all 0.2s;
+}
+.sub-tab-button:hover {
+    background: #f0f0f0;
+}
+.sub-tab-button.active {
+    background: #0066cc;
+    color: white;
+    border-color: #0066cc;
 }
 @media (prefers-color-scheme: dark) {
     body {
@@ -399,10 +429,104 @@ body {
         <a href="/">新建笔记</a>
     </div>
     <div class="tabs">
-        <button class="tab-button active" onclick="showTab('active')">活跃笔记 ({{.TotalCount}})</button>
-        <button class="tab-button" onclick="showTab('backup')">备份笔记 ({{.BackupCount}})</button>
+        <button class="tab-button active" onclick="showTab('active')">📝 活跃笔记 ({{.TotalCount}})</button>
+        <button class="tab-button" onclick="showTab('backup')">📦 备份笔记 ({{.BackupCount}})</button>
+        <button class="tab-button" onclick="showTab('settings')">⚙️ 系统设置</button>
     </div>
-    <div class="stats">
+    <div id="active-tab" class="tab-content">
+    <div class="notes-list">
+        <div id="active-notes">
+            {{if .GroupedNotes}}
+            {{range .GroupedNotes}}
+            <div class="date-group" data-date="{{.Date}}">
+                <div style="margin: 10px 16px; padding: 8px 12px; background: #f0f0f0; border-left: 4px solid #0066cc; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                    <h3 style="margin: 0; font-size: 14px; color: #333; font-weight: 600;">📅 {{.Date}} ({{len .Notes}} 条笔记)</h3>
+                    <select class="date-filter-select" onchange="filterByDate()" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; background: white; cursor: pointer;">
+                        <option value="">全部日期</option>
+                        {{range $.DateList}}
+                        <option value="{{.}}" {{if eq . $.Date}}selected{{end}}>{{.}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <table class="notes-table">
+                    <thead>
+                        <tr>
+                            <th>笔记名称</th>
+                            <th>内容预览</th>
+                            <th>大小</th>
+                            <th>更新时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Notes}}
+                        <tr>
+                            <td><a href="/{{.Name}}" class="note-name">{{.Name}}</a></td>
+                            <td class="note-content" title="{{.Content}}">{{if .Content}}{{preview .Content 50}}{{else}}<em>空笔记</em>{{end}}</td>
+                            <td class="note-size">{{formatSize .Size}}</td>
+                            <td class="note-date">{{formatDate .UpdatedAt}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+            {{else}}
+            <div class="empty">
+                <div class="empty-icon">📄</div>
+                <p>还没有笔记，<a href="/" style="color: #0066cc;">创建第一个笔记</a></p>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    </div>
+    <div id="backup-tab" class="tab-content" style="display: none;">
+    <div class="notes-list">
+        <div id="backup-notes">
+            {{if .GroupedBackupNotes}}
+            {{range .GroupedBackupNotes}}
+            <div class="date-group" data-date="{{.Date}}">
+                <div style="margin: 10px 16px; padding: 8px 12px; background: #f0f0f0; border-left: 4px solid #ff9800; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                    <h3 style="margin: 0; font-size: 14px; color: #333; font-weight: 600;">📅 {{.Date}} ({{len .Notes}} 条笔记)</h3>
+                    <select class="date-filter-select" onchange="filterByDate()" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; background: white; cursor: pointer;">
+                        <option value="">全部日期</option>
+                        {{range $.DateList}}
+                        <option value="{{.}}" {{if eq . $.Date}}selected{{end}}>{{.}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <table class="notes-table">
+                    <thead>
+                        <tr>
+                            <th>笔记名称</th>
+                            <th>内容预览</th>
+                            <th>大小</th>
+                            <th>更新时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Notes}}
+                        <tr>
+                            <td><a href="/read/{{.Name}}" class="note-name">{{.Name}}</a></td>
+                            <td class="note-content" title="{{.Content}}">{{if .Content}}{{preview .Content 50}}{{else}}<em>空笔记</em>{{end}}</td>
+                            <td class="note-size">{{formatSize .Size}}</td>
+                            <td class="note-date">{{formatDate .UpdatedAt}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+            {{else}}
+            <div class="empty">
+                <div class="empty-icon">📦</div>
+                <p>还没有备份笔记</p>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    </div>
+    <div id="settings-tab" class="tab-content" style="display: none;">
+    <div class="stats" style="margin-bottom: 0;">
         <div class="stat-item">
             <span class="stat-label" id="stat-label">总笔记数</span>
             <span class="stat-value" id="total-notes">{{.TotalCount}}</span>
@@ -418,145 +542,88 @@ body {
         <div class="stat-item">
             <span class="stat-label">最大总文件大小限制</span>
             <span class="stat-value" id="max-total-size">{{formatSize .MaxTotalSize}}</span>
-            <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
-                <input type="text" id="max-total-size-input" placeholder="如: 500MB" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; width: 120px;">
-                <button onclick="updateMaxTotalSize()" style="padding: 4px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="margin-top: 4px; display: flex; gap: 6px; align-items: center;">
+                <input type="text" id="max-total-size-input" placeholder="如: 500MB" style="padding: 3px 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px; width: 100px;">
+                <button onclick="updateMaxTotalSize()" style="padding: 3px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
             </div>
         </div>
         <div class="stat-item">
             <span class="stat-label">最大笔记数量限制</span>
             <span class="stat-value" id="max-note-count">{{.MaxNoteCount}}</span>
-            <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
-                <input type="number" id="max-note-count-input" placeholder="如: 500" min="1" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; width: 120px;">
-                <button onclick="updateConfig('maxNoteCount')" style="padding: 4px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="margin-top: 4px; display: flex; gap: 6px; align-items: center;">
+                <input type="number" id="max-note-count-input" placeholder="如: 500" min="1" style="padding: 3px 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px; width: 100px;">
+                <button onclick="updateConfig('maxNoteCount')" style="padding: 3px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
             </div>
         </div>
     </div>
-    <div style="padding: 20px; background: #f9f9f9; border-top: 1px solid #ddd;">
-        <h3 style="margin-bottom: 15px; font-size: 16px; color: #333;">配置管理</h3>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">访问令牌（用于访问笔记）</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="access-token-input" value="{{.AccessToken}}" placeholder="留空表示无需授权" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('accessToken')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+    <div style="padding: 12px 16px; background: #f9f9f9; border-top: 1px solid #ddd;">
+        <h3 style="margin-bottom: 10px; font-size: 14px; color: #333; font-weight: 600;">配置管理</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px;">
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">访问令牌（用于访问笔记）</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="access-token-input" value="{{.AccessToken}}" placeholder="留空表示无需授权" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('accessToken')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
                 </div>
-                <div style="margin-top: 5px; font-size: 11px; color: #999;">留空表示无需授权即可访问笔记</div>
+                <div style="margin-top: 3px; font-size: 10px; color: #999;">留空表示无需授权即可访问笔记</div>
             </div>
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">管理后台路径</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="admin-path-input" value="{{.AdminPath}}" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('adminPath')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
-                </div>
-            </div>
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">笔记名称最小长度</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="number" id="note-name-len-input" value="{{.NoteNameLen}}" min="1" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('noteNameLen')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">管理后台路径</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="admin-path-input" value="{{.AdminPath}}" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('adminPath')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
                 </div>
             </div>
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">备份天数</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="number" id="backup-days-input" value="{{.BackupDays}}" min="1" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('backupDays')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">笔记名称最小长度</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="number" id="note-name-len-input" value="{{.NoteNameLen}}" min="1" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('noteNameLen')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
                 </div>
             </div>
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">随机字符串字符集</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="note-chars-input" value="{{.NoteChars}}" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('noteChars')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">备份天数</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="number" id="backup-days-input" value="{{.BackupDays}}" min="1" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('backupDays')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
                 </div>
             </div>
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">最大文件大小</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="max-file-size-input" placeholder="如: 10MB" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('maxFileSize')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">随机字符串字符集</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="note-chars-input" value="{{.NoteChars}}" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('noteChars')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
                 </div>
-                <div style="margin-top: 5px; font-size: 11px; color: #999;">当前: {{.MaxFileSizeMB}} MB</div>
             </div>
-            <div style="background: white; padding: 15px; border-radius: 4px; border: 1px solid #ddd;">
-                <label style="display: block; margin-bottom: 5px; font-size: 12px; color: #666;">最大路径长度</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="number" id="max-path-length-input" value="{{.MaxPathLength}}" min="1" style="flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
-                    <button onclick="updateConfig('maxPathLength')" style="padding: 6px 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">更新</button>
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">最大文件大小</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="max-file-size-input" placeholder="如: 10MB" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('maxFileSize')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
+                </div>
+                <div style="margin-top: 3px; font-size: 10px; color: #999;">当前: {{.MaxFileSizeMB}} MB</div>
+            </div>
+            <div style="background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 4px; font-size: 11px; color: #666;">最大路径长度</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="number" id="max-path-length-input" value="{{.MaxPathLength}}" min="1" style="flex: 1; padding: 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 11px;">
+                    <button onclick="updateConfig('maxPathLength')" style="padding: 5px 10px; background: #0066cc; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">更新</button>
                 </div>
             </div>
         </div>
     </div>
-    <div class="notes-list">
-        <div id="active-notes" class="tab-content">
-            {{if .Notes}}
-            <table class="notes-table">
-                <thead>
-                    <tr>
-                        <th>笔记名称</th>
-                        <th>内容预览</th>
-                        <th>大小</th>
-                        <th>更新时间</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{range .Notes}}
-                    <tr>
-                        <td><a href="/{{.Name}}" class="note-name">{{.Name}}</a></td>
-                        <td class="note-content" title="{{.Content}}">{{if .Content}}{{preview .Content 50}}{{else}}<em>空笔记</em>{{end}}</td>
-                        <td class="note-size">{{formatSize .Size}}</td>
-                        <td class="note-date">{{formatDate .UpdatedAt}}</td>
-                    </tr>
-                    {{end}}
-                </tbody>
-            </table>
-            {{else}}
-            <div class="empty">
-                <div class="empty-icon">📄</div>
-                <p>还没有笔记，<a href="/" style="color: #0066cc;">创建第一个笔记</a></p>
-            </div>
-            {{end}}
-        </div>
-        <div id="backup-notes" class="tab-content" style="display: none;">
-            {{if .BackupNotes}}
-            <table class="notes-table">
-                <thead>
-                    <tr>
-                        <th>笔记名称</th>
-                        <th>内容预览</th>
-                        <th>大小</th>
-                        <th>更新时间</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{range .BackupNotes}}
-                    <tr>
-                        <td><span class="note-name">{{.Name}}</span></td>
-                        <td class="note-content" title="{{.Content}}">{{if .Content}}{{preview .Content 50}}{{else}}<em>空笔记</em>{{end}}</td>
-                        <td class="note-size">{{formatSize .Size}}</td>
-                        <td class="note-date">{{formatDate .UpdatedAt}}</td>
-                    </tr>
-                    {{end}}
-                </tbody>
-            </table>
-            {{else}}
-            <div class="empty">
-                <div class="empty-icon">📦</div>
-                <p>还没有备份笔记</p>
-            </div>
-            {{end}}
-        </div>
     </div>
 </div>
 <script>
 // Session token is stored in HttpOnly cookie, not accessible from JavaScript
 // All requests will automatically include the cookie
 
+
 function showTab(tabName) {
     // Hide all tab contents
-    document.getElementById('active-notes').style.display = 'none';
-    document.getElementById('backup-notes').style.display = 'none';
+    document.getElementById('active-tab').style.display = 'none';
+    document.getElementById('backup-tab').style.display = 'none';
+    document.getElementById('settings-tab').style.display = 'none';
     
     // Remove active class from all buttons
     document.querySelectorAll('.tab-button').forEach(btn => {
@@ -565,18 +632,54 @@ function showTab(tabName) {
     
     // Show selected tab
     if (tabName === 'active') {
-        document.getElementById('active-notes').style.display = 'block';
+        document.getElementById('active-tab').style.display = 'block';
         document.querySelector('.tab-button:first-child').classList.add('active');
-        document.getElementById('total-notes').textContent = '{{.TotalCount}}';
-        document.getElementById('total-size').textContent = '{{formatSize .TotalSize}}';
-        document.getElementById('stat-label').textContent = '总笔记数';
-    } else {
-        document.getElementById('backup-notes').style.display = 'block';
+    } else if (tabName === 'backup') {
+        document.getElementById('backup-tab').style.display = 'block';
+        document.querySelector('.tab-button:nth-child(2)').classList.add('active');
+    } else if (tabName === 'settings') {
+        document.getElementById('settings-tab').style.display = 'block';
         document.querySelector('.tab-button:last-child').classList.add('active');
-        document.getElementById('total-notes').textContent = '{{.BackupCount}}';
-        document.getElementById('total-size').textContent = '{{formatSize .BackupTotalSize}}';
-        document.getElementById('stat-label').textContent = '备份笔记数';
     }
+    
+    // 重新应用日期过滤
+    filterByDate();
+}
+
+function filterByDate() {
+    // 获取所有日期过滤器
+    const filters = document.querySelectorAll('.date-filter-select');
+    if (filters.length === 0) return;
+    
+    // 使用第一个过滤器的值（所有过滤器应该同步）
+    const selectedDate = filters[0].value;
+    
+    // 同步所有过滤器的值
+    filters.forEach(filter => {
+        if (filter.value !== selectedDate) {
+            filter.value = selectedDate;
+        }
+    });
+    
+    // 过滤活跃笔记
+    const activeGroups = document.querySelectorAll('#active-notes .date-group');
+    activeGroups.forEach(group => {
+        if (!selectedDate || group.getAttribute('data-date') === selectedDate) {
+            group.style.display = 'block';
+        } else {
+            group.style.display = 'none';
+        }
+    });
+    
+    // 过滤备份笔记
+    const backupGroups = document.querySelectorAll('#backup-notes .date-group');
+    backupGroups.forEach(group => {
+        if (!selectedDate || group.getAttribute('data-date') === selectedDate) {
+            group.style.display = 'block';
+        } else {
+            group.style.display = 'none';
+        }
+    });
 }
 
 // Auto refresh every 30 seconds

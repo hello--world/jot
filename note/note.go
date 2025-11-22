@@ -1,6 +1,7 @@
 package note
 
 import (
+	"encoding/json"
 	"log"
 	"math/rand"
 	"os"
@@ -16,6 +17,8 @@ type Note struct {
 	Content   string    `json:"content"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Size      int64     `json:"size"`
+	DateDir   string    `json:"date_dir"`  // 日期目录，用于分组（格式：YYYYMMDD）
+	IsBackup  bool      `json:"is_backup"` // 是否在备份文件夹
 }
 
 // NoteListResponse represents a response containing a list of notes
@@ -32,11 +35,15 @@ type Manager struct {
 	NoteChars     string
 	BackupDays    int
 	ExistingNotes *sync.Map
+	NoteIndex     *sync.Map  // 存储 noteName -> dateDir 的映射
+	indexFile     string     // 索引文件路径
+	indexLock     sync.Mutex // 索引文件读写锁
 }
 
 // NewManager 创建新的笔记管理器
 func NewManager(savePath, backupPath string, maxPathLength, noteNameLen, backupDays int, noteChars string) *Manager {
-	return &Manager{
+	indexFile := filepath.Join(savePath, ".notes_index")
+	m := &Manager{
 		SavePath:      savePath,
 		BackupPath:    backupPath,
 		MaxPathLength: maxPathLength,
@@ -44,7 +51,12 @@ func NewManager(savePath, backupPath string, maxPathLength, noteNameLen, backupD
 		NoteChars:     noteChars,
 		BackupDays:    backupDays,
 		ExistingNotes: &sync.Map{},
+		NoteIndex:     &sync.Map{},
+		indexFile:     indexFile,
 	}
+	// 加载索引文件
+	m.LoadNoteIndex()
+	return m
 }
 
 // Note lock functions
@@ -131,27 +143,208 @@ func (m *Manager) IsValidGeneratedName(name string) bool {
 	return true
 }
 
-// GetNotePath 获取笔记文件路径
-func (m *Manager) GetNotePath(name string) string {
-	return filepath.Join(m.SavePath, name)
-}
+// LoadNoteIndex 从索引文件加载笔记索引
+func (m *Manager) LoadNoteIndex() {
+	m.indexLock.Lock()
+	defer m.indexLock.Unlock()
 
-// LoadExistingNotes 将所有已存在的笔记名称加载到内存中
-func (m *Manager) LoadExistingNotes() error {
-	files, err := os.ReadDir(m.SavePath)
+	data, err := os.ReadFile(m.indexFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // Directory doesn't exist yet, no notes to load
+			// 索引文件不存在，扫描目录重建索引
+			m.rebuildIndex()
+			return
 		}
-		return err
+		log.Printf("Error reading note index: %v", err)
+		return
+	}
+
+	var index map[string]string
+	if err := json.Unmarshal(data, &index); err != nil {
+		log.Printf("Error parsing note index: %v, rebuilding...", err)
+		m.rebuildIndex()
+		return
+	}
+
+	// 加载到内存
+	for noteName, dateDir := range index {
+		m.NoteIndex.Store(noteName, dateDir)
+		m.ExistingNotes.Store(noteName, true)
+	}
+	log.Printf("Loaded %d notes from index", len(index))
+}
+
+// SaveNoteIndex 保存笔记索引到文件
+func (m *Manager) SaveNoteIndex() {
+	m.indexLock.Lock()
+	defer m.indexLock.Unlock()
+
+	index := make(map[string]string)
+	m.NoteIndex.Range(func(key, value interface{}) bool {
+		noteName := key.(string)
+		dateDir := value.(string)
+		index[noteName] = dateDir
+		return true
+	})
+
+	data, err := json.Marshal(index)
+	if err != nil {
+		log.Printf("Error marshaling note index: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(m.indexFile, data, 0644); err != nil {
+		log.Printf("Error saving note index: %v", err)
+	}
+}
+
+// rebuildIndex 重建索引（扫描所有日期目录）
+// 注意：调用此函数时，调用者必须已经持有 indexLock
+func (m *Manager) rebuildIndex() {
+	m.NoteIndex = &sync.Map{}
+	m.ExistingNotes = &sync.Map{}
+
+	// 确保 SavePath 目录存在
+	if err := os.MkdirAll(m.SavePath, 0755); err != nil {
+		log.Printf("Error creating save path: %v", err)
+		return
+	}
+
+	files, err := os.ReadDir(m.SavePath)
+	if err != nil {
+		log.Printf("Error reading save path: %v", err)
+		return
 	}
 
 	for _, file := range files {
-		if !file.IsDir() && m.IsSafeNoteName(file.Name()) {
-			m.ExistingNotes.Store(file.Name(), true)
+		if !file.IsDir() {
+			continue
+		}
+
+		dirName := file.Name()
+		// 检查是否是日期格式目录（YYYYMMDD，8位数字）
+		if len(dirName) == 8 {
+			isDateDir := true
+			for _, r := range dirName {
+				if r < '0' || r > '9' {
+					isDateDir = false
+					break
+				}
+			}
+			if !isDateDir {
+				continue
+			}
+		} else {
+			continue
+		}
+
+		// 读取日期目录中的笔记
+		datePath := filepath.Join(m.SavePath, dirName)
+		noteFiles, err := os.ReadDir(datePath)
+		if err != nil {
+			continue
+		}
+
+		for _, noteFile := range noteFiles {
+			if !noteFile.IsDir() && m.IsSafeNoteName(noteFile.Name()) {
+				noteName := noteFile.Name()
+				m.NoteIndex.Store(noteName, dirName)
+				m.ExistingNotes.Store(noteName, true)
+			}
 		}
 	}
 
+	// 保存重建的索引（不获取锁，因为调用者已经持有）
+	index := make(map[string]string)
+	m.NoteIndex.Range(func(key, value interface{}) bool {
+		noteName := key.(string)
+		dateDir := value.(string)
+		index[noteName] = dateDir
+		return true
+	})
+
+	data, err := json.Marshal(index)
+	if err != nil {
+		log.Printf("Error marshaling note index: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(m.indexFile, data, 0644); err != nil {
+		log.Printf("Error saving note index: %v", err)
+		return
+	}
+
+	log.Printf("Rebuilt note index with %d notes", len(index))
+}
+
+// getIndexMap 获取索引的副本（用于统计）
+func (m *Manager) getIndexMap() map[string]string {
+	index := make(map[string]string)
+	m.NoteIndex.Range(func(key, value interface{}) bool {
+		index[key.(string)] = value.(string)
+		return true
+	})
+	return index
+}
+
+// GetNotePath 获取笔记文件路径（保存时使用当前日期目录）
+func (m *Manager) GetNotePath(name string) string {
+	dateDir := time.Now().Format("20060102")
+	return filepath.Join(m.SavePath, dateDir, name)
+}
+
+// FindNotePath 从索引中查找笔记文件路径（包括备份文件夹）
+func (m *Manager) FindNotePath(name string) (string, error) {
+	// 首先从活跃笔记索引中查找
+	value, exists := m.NoteIndex.Load(name)
+	if exists {
+		dateDir := value.(string)
+		notePath := filepath.Join(m.SavePath, dateDir, name)
+		if _, err := os.Stat(notePath); err == nil {
+			return notePath, nil
+		}
+		// 文件不存在，从索引中移除
+		m.NoteIndex.Delete(name)
+		m.ExistingNotes.Delete(name)
+		m.SaveNoteIndex()
+	}
+
+	// 如果活跃笔记中找不到，从备份文件夹中查找
+	if _, err := os.Stat(m.BackupPath); err == nil {
+		dateDirs, err := os.ReadDir(m.BackupPath)
+		if err == nil {
+			// 按日期倒序查找（最新的优先）
+			for _, dateDir := range dateDirs {
+				if !dateDir.IsDir() {
+					continue
+				}
+				dirName := dateDir.Name()
+				// 检查是否是日期格式目录
+				if len(dirName) == 8 {
+					isDateDir := true
+					for _, r := range dirName {
+						if r < '0' || r > '9' {
+							isDateDir = false
+							break
+						}
+					}
+					if isDateDir {
+						notePath := filepath.Join(m.BackupPath, dirName, name)
+						if _, err := os.Stat(notePath); err == nil {
+							return notePath, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return "", os.ErrNotExist
+}
+
+// LoadExistingNotes 将所有已存在的笔记名称加载到内存中（已由 LoadNoteIndex 处理）
+func (m *Manager) LoadExistingNotes() error {
+	// 索引加载已在 NewManager 中完成
 	return nil
 }
 
@@ -224,29 +417,64 @@ func (m *Manager) GenerateNoteName() string {
 	return ""
 }
 
-// SaveNote 保存笔记
+// SaveNote 保存笔记（保存到当前日期目录）
 func (m *Manager) SaveNote(name, content string) error {
-	path := m.GetNotePath(name)
-	if content == "" {
-		os.Remove(path)
-		m.RemoveNoteFromCache(name)
-		return nil
-	}
-
 	// 检查这是否是新笔记
 	wasNewNote := !m.IsNoteExists(name)
 
+	// 如果内容为空，删除笔记
+	if content == "" {
+		notePath, err := m.FindNotePath(name)
+		if err == nil {
+			os.Remove(notePath)
+		}
+		m.NoteIndex.Delete(name)
+		m.RemoveNoteFromCache(name)
+		m.SaveNoteIndex()
+		return nil
+	}
+
+	// 获取当前日期目录
+	currentDateDir := time.Now().Format("20060102")
+	path := filepath.Join(m.SavePath, currentDateDir, name)
+
+	// 如果笔记已存在但在其他日期目录，先删除旧文件
+	if !wasNewNote {
+		oldPath, err := m.FindNotePath(name)
+		if err == nil && oldPath != path {
+			os.Remove(oldPath)
+		}
+	}
+
+	// 创建日期目录（如果不存在）
+	dateDir := filepath.Join(m.SavePath, currentDateDir)
+	if err := os.MkdirAll(dateDir, 0755); err != nil {
+		return err
+	}
+
+	// 保存到当前日期目录
 	err := os.WriteFile(path, []byte(content), 0644)
-	if err == nil && wasNewNote {
-		// 如果是新笔记，添加到缓存
-		m.AddNoteToCache(name)
+	if err == nil {
+		// 更新索引
+		m.NoteIndex.Store(name, currentDateDir)
+		if wasNewNote {
+			m.AddNoteToCache(name)
+		}
+		// 保存索引文件
+		m.SaveNoteIndex()
 	}
 	return err
 }
 
-// LoadNote 加载笔记
+// LoadNote 加载笔记（从所有日期目录中查找）
 func (m *Manager) LoadNote(name string) (string, error) {
-	path := m.GetNotePath(name)
+	path, err := m.FindNotePath(name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -257,31 +485,49 @@ func (m *Manager) LoadNote(name string) (string, error) {
 	return string(data), nil
 }
 
-// GetAllNotes 获取所有笔记
+// GetAllNotes 获取所有笔记（从索引中读取）
 func (m *Manager) GetAllNotes() ([]Note, error) {
-	files, err := os.ReadDir(m.SavePath)
-	if err != nil {
-		return nil, err
-	}
-
 	notes := make([]Note, 0)
-	for _, file := range files {
-		if !file.IsDir() && m.IsSafeNoteName(file.Name()) {
-			content, _ := m.LoadNote(file.Name())
-			info, _ := file.Info()
-			notes = append(notes, Note{
-				Name:      file.Name(),
-				Content:   content,
-				UpdatedAt: info.ModTime(),
-				Size:      info.Size(),
-			})
+
+	m.NoteIndex.Range(func(key, value interface{}) bool {
+		noteName := key.(string)
+		dateDir := value.(string)
+		notePath := filepath.Join(m.SavePath, dateDir, noteName)
+
+		// 读取文件信息
+		info, err := os.Stat(notePath)
+		if err != nil {
+			// 文件不存在，从索引中移除
+			m.NoteIndex.Delete(noteName)
+			m.ExistingNotes.Delete(noteName)
+			return true
 		}
-	}
+
+		// 读取文件内容
+		content, err := os.ReadFile(notePath)
+		if err != nil {
+			return true
+		}
+
+		notes = append(notes, Note{
+			Name:      noteName,
+			Content:   string(content),
+			UpdatedAt: info.ModTime(),
+			Size:      info.Size(),
+			DateDir:   dateDir,
+			IsBackup:  false,
+		})
+		return true
+	})
+
+	// 如果索引中有无效条目，保存更新后的索引
+	m.SaveNoteIndex()
+
 	return notes, nil
 }
 
-// MoveOldNotesToBackup 将超过 backupDays 天未修改的笔记移动到备份文件夹
-// 备份文件夹结构: bak/YYYYMMDD/note_name
+// MoveOldNotesToBackup 将超过 backupDays 天未修改的日期目录移动到备份文件夹
+// 备份文件夹结构: bak/YYYYMMDD/（整个日期目录）
 func (m *Manager) MoveOldNotesToBackup() error {
 	files, err := os.ReadDir(m.SavePath)
 	if err != nil {
@@ -292,43 +538,106 @@ func (m *Manager) MoveOldNotesToBackup() error {
 	movedCount := 0
 
 	for _, file := range files {
-		if file.IsDir() || !m.IsSafeNoteName(file.Name()) {
+		if !file.IsDir() {
 			continue
 		}
 
-		info, err := file.Info()
+		// 检查是否是日期格式目录（YYYYMMDD，8位数字）
+		dirName := file.Name()
+		if len(dirName) != 8 {
+			continue
+		}
+		isDateDir := true
+		for _, r := range dirName {
+			if r < '0' || r > '9' {
+				isDateDir = false
+				break
+			}
+		}
+		if !isDateDir {
+			continue
+		}
+
+		// 检查日期目录的最后修改时间
+		// 使用目录中最新文件的修改时间作为目录的修改时间
+		datePath := filepath.Join(m.SavePath, dirName)
+		noteFiles, err := os.ReadDir(datePath)
 		if err != nil {
 			continue
 		}
 
-		// Check if note hasn't been modified for backupDays days
-		if info.ModTime().Before(cutoffTime) {
-			sourcePath := m.GetNotePath(file.Name())
-			// Use creation/modification date as directory name (YYYYMMDD format)
-			dateDir := info.ModTime().Format("20060102")
-			dateBackupPath := filepath.Join(m.BackupPath, dateDir)
-
-			// Create date directory if it doesn't exist
-			if err := os.MkdirAll(dateBackupPath, 0755); err != nil {
-				log.Printf("Failed to create backup directory %s: %v", dateBackupPath, err)
+		// 找到目录中最新的文件修改时间
+		var latestModTime time.Time
+		hasNotes := false
+		for _, noteFile := range noteFiles {
+			if noteFile.IsDir() {
 				continue
 			}
-
-			backupFilePath := filepath.Join(dateBackupPath, file.Name())
-
-			// Move file to backup folder
-			if err := os.Rename(sourcePath, backupFilePath); err != nil {
-				log.Printf("Failed to move note %s to backup: %v", file.Name(), err)
+			info, err := noteFile.Info()
+			if err != nil {
 				continue
 			}
+			if !hasNotes || info.ModTime().After(latestModTime) {
+				latestModTime = info.ModTime()
+				hasNotes = true
+			}
+		}
 
-			movedCount++
-			log.Printf("Moved old note %s to backup/%s (last modified: %s)", file.Name(), dateDir, info.ModTime().Format("2006-01-02 15:04:05"))
+		// 如果目录中没有笔记，或者最新修改时间早于截止时间，移动整个目录
+		if !hasNotes || latestModTime.Before(cutoffTime) {
+			sourcePath := filepath.Join(m.SavePath, dirName)
+			backupPath := filepath.Join(m.BackupPath, dirName)
+
+			// 如果备份目录已存在，合并文件
+			if _, err := os.Stat(backupPath); err == nil {
+				// 备份目录已存在，移动目录中的文件
+				for _, noteFile := range noteFiles {
+					if noteFile.IsDir() {
+						continue
+					}
+					noteName := noteFile.Name()
+					if !m.IsSafeNoteName(noteName) {
+						continue
+					}
+					sourceFilePath := filepath.Join(sourcePath, noteName)
+					backupFilePath := filepath.Join(backupPath, noteName)
+					if err := os.Rename(sourceFilePath, backupFilePath); err != nil {
+						log.Printf("Failed to move note %s/%s to backup: %v", dirName, noteName, err)
+						continue
+					}
+					m.RemoveNoteFromCache(noteName)
+					m.NoteIndex.Delete(noteName)
+					movedCount++
+				}
+				// 删除空的源目录
+				os.Remove(sourcePath)
+				// 保存更新后的索引
+				m.SaveNoteIndex()
+			} else {
+				// 备份目录不存在，直接移动整个目录
+				if err := os.Rename(sourcePath, backupPath); err != nil {
+					log.Printf("Failed to move date directory %s to backup: %v", dirName, err)
+					continue
+				}
+
+				// 从缓存和索引中移除该目录下的所有笔记
+				for _, noteFile := range noteFiles {
+					if !noteFile.IsDir() && m.IsSafeNoteName(noteFile.Name()) {
+						m.RemoveNoteFromCache(noteFile.Name())
+						m.NoteIndex.Delete(noteFile.Name())
+					}
+				}
+				// 保存更新后的索引
+				m.SaveNoteIndex()
+
+				movedCount++
+				log.Printf("Moved date directory %s to backup (latest modified: %s)", dirName, latestModTime.Format("2006-01-02 15:04:05"))
+			}
 		}
 	}
 
 	if movedCount > 0 {
-		log.Printf("Moved %d old note(s) to backup folder", movedCount)
+		log.Printf("Moved %d date directory/directories to backup folder", movedCount)
 	}
 
 	return nil
@@ -382,6 +691,8 @@ func (m *Manager) GetAllBackupNotes() ([]Note, error) {
 				Content:   string(content),
 				UpdatedAt: info.ModTime(),
 				Size:      info.Size(),
+				DateDir:   dateDir.Name(),
+				IsBackup:  true,
 			})
 		}
 	}

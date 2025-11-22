@@ -11,6 +11,8 @@ type Note struct {
 	Content   string    `json:"content"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Size      int64     `json:"size"`
+	DateDir   string    `json:"date_dir"`  // 日期目录，用于分组（格式：YYYYMMDD）
+	IsBackup  bool      `json:"is_backup"` // 是否在备份文件夹
 }
 
 // Dependencies 包含 handlers 需要的所有依赖
@@ -28,6 +30,7 @@ type Dependencies struct {
 	GenerateNoteName    func() string
 	IsSafeNoteName      func(string) bool
 	GetNotePath         func(string) string
+	FindNotePath        func(string) (string, error)
 	IsNoteExists        func(string) bool
 	GetFileCreationTime func(string) (time.Time, error)
 

@@ -31,6 +31,9 @@ body {
     height: 100vh;
     align-items: stretch;
 }
+.preview-panel {
+    display: flex;
+}
 .panel-header {
     background: #fff;
     padding: 10px 20px;
@@ -43,6 +46,13 @@ body {
     min-height: 40px;
     height: 40px;
     flex-shrink: 0;
+}
+.preview-header-left {
+    flex: 0 0 auto;
+}
+.preview-header-right {
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 .file-info {
     display: flex;
@@ -70,10 +80,11 @@ body {
     text-decoration: underline;
 }
 .header-btn {
-    padding: 8px 14px;
+    padding: 6px 12px;
+    margin: 4px 0;
     color: white;
     border: none;
-    border-radius: 6px;
+    border-radius: 12px;
     cursor: pointer;
     font-size: 12px;
     line-height: 1.4;
@@ -81,11 +92,12 @@ body {
     transition: all 0.2s;
     white-space: nowrap;
     display: inline-flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
+    gap: 4px;
     min-width: 60px;
-    height: 50px;
+    height: auto;
     font-weight: 500;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
@@ -101,6 +113,25 @@ body {
 .header-btn br {
     line-height: 1.2;
     margin: 2px 0;
+}
+#connection-status {
+    padding: 4px 12px;
+    margin: 4px 0;
+    background: #4caf50;
+    color: white;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+#connection-status.error {
+    background: #f44336;
+    color: white;
+}
+#connection-status.disconnected {
+    background: #999;
+    color: white;
 }
 #editor {
     flex: 1;
@@ -175,32 +206,213 @@ body {
 }
 .status {
     position: fixed;
-    bottom: 20px;
-    right: 20px;
-    padding: 8px 16px;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 20px;
     background: #4caf50;
     color: white;
-    border-radius: 4px;
-    font-size: 12px;
+    border-radius: 8px;
+    font-size: 14px;
     opacity: 0;
     transition: opacity 0.3s;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 .status.show {
     opacity: 1;
+    transform: translateX(-50%);
 }
 .status.error {
     background: #f44336;
 }
 @media (max-width: 768px) {
+    body {
+        overflow: auto;
+        height: auto;
+        padding: 0;
+    }
     .container {
         flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+        width: 100%;
+        max-width: 100%;
     }
-    .editor-panel, .preview-panel {
-        height: 50vh;
+    /* 移动端默认只显示编辑面板 */
+    .preview-panel {
+        display: none !important;
+        width: 0 !important;
+        flex: 0 !important;
+    }
+    .preview-panel.show {
+        display: flex !important;
+        width: 100% !important;
+        height: auto;
+        min-height: 50vh;
+        flex: 1;
+    }
+    .editor-panel {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: auto;
+        min-height: 100vh;
+        flex: 1 1 100% !important;
+    }
+    .editor-panel.hide {
+        display: none !important;
+        width: 0 !important;
+        flex: 0 !important;
+    }
+    .panel-header {
+        padding: 12px 15px;
+        font-size: 12px;
+        min-height: auto;
+        height: auto;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .file-info {
+        gap: 10px;
+        flex-wrap: wrap;
+        width: 100%;
+    }
+    .file-info-item {
+        font-size: 12px;
+    }
+    .header-btn {
+        padding: 10px 14px;
+        font-size: 13px;
+        min-width: 75px;
+        height: 44px;
+    }
+    #editor, #preview {
+        padding: 15px;
+        font-size: 16px; /* 防止 iOS 自动缩放 */
+        min-height: calc(100vh - 100px);
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box;
     }
     #preview {
         border-left: none;
         border-top: 1px solid #ddd;
+    }
+    .status {
+        top: 15px !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        right: auto !important;
+        bottom: auto !important;
+        font-size: 14px;
+        padding: 10px 20px;
+    }
+    /* 浮动按钮在移动端优化 */
+    .floating-btn {
+        padding: 14px 20px !important;
+        font-size: 15px !important;
+        min-width: 85px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2) !important;
+    }
+    /* 上传窗口在移动端全屏 */
+    #upload-window {
+        min-width: 90% !important;
+        max-width: 90% !important;
+        padding: 25px !important;
+        border-radius: 12px !important;
+    }
+    #connection-status {
+        font-size: 12px;
+        white-space: nowrap;
+        padding: 4px 12px;
+        margin: 4px 0;
+        background: #4caf50;
+        color: white;
+        border-radius: 12px;
+        font-weight: 500;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    #connection-status.error {
+        background: #f44336;
+        color: white;
+    }
+    #connection-status.disconnected {
+        background: #999;
+        color: white;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 0;
+        margin: 0;
+    }
+    .container {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .editor-panel {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .panel-header {
+        padding: 10px 12px;
+        font-size: 11px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        width: 100%;
+    }
+    .file-info {
+        gap: 8px;
+        width: 100%;
+        order: 2;
+    }
+    .file-info-item {
+        font-size: 11px;
+    }
+    .file-info-label {
+        display: none; /* 在小屏幕上隐藏标签，只显示值 */
+    }
+    .header-btn {
+        padding: 10px 14px;
+        font-size: 13px;
+        min-width: 70px;
+        height: 42px;
+    }
+    .header-btn br {
+        display: none; /* 小屏幕上按钮文字单行显示 */
+    }
+    #editor, #preview {
+        padding: 15px;
+        font-size: 16px;
+    }
+    .status {
+        top: 10px !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        right: auto !important;
+        bottom: auto !important;
+        font-size: 13px;
+        padding: 8px 16px;
+    }
+    /* 浮动按钮在小屏幕优化 */
+    .floating-btn {
+        padding: 14px 18px !important;
+        font-size: 15px !important;
+        min-width: 75px !important;
+    }
+    /* 浮动按钮容器在小屏幕调整 */
+    .floating-actions {
+        bottom: 15px !important;
+        left: 15px !important;
+        gap: 8px !important;
+        flex-direction: column;
+    }
+    #connection-status {
+        font-size: 11px;
+        padding: 3px 10px;
+        margin: 3px 0;
     }
 }
 @media (prefers-color-scheme: dark) {
@@ -266,12 +478,13 @@ body {
         </div>
         <textarea id="editor" placeholder="开始输入 Markdown 内容...">{{.Content}}</textarea>
     </div>
-    <div class="preview-panel">
+    <div class="preview-panel" id="preview-panel">
         <div class="panel-header">
-            <span></span>
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <button onclick="shareNote()" class="header-btn" style="background: #28a745;">🔗<br>复制地址</button>
-                <button onclick="copyRawUrl()" class="header-btn" style="background: #17a2b8;">📋<br>下载地址</button>
+            <div class="preview-header-left" style="display: flex; gap: 8px; align-items: center;">
+            </div>
+            <div class="preview-header-right" style="display: flex; gap: 8px; align-items: center;">
+                <button onclick="shareNote()" class="header-btn" style="background: #28a745;">🔗 复制地址</button>
+                <button onclick="copyRawUrl()" class="header-btn" style="background: #17a2b8;">📋 下载地址</button>
                 <span id="connection-status">连接中</span>
             </div>
         </div>
@@ -377,7 +590,7 @@ function connectWebSocket() {
     
     ws.onopen = () => {
         connectionStatus.textContent = '已连接';
-        connectionStatus.style.color = '#4caf50';
+        connectionStatus.className = '';
     };
     
     ws.onmessage = (event) => {
@@ -391,12 +604,12 @@ function connectWebSocket() {
     
     ws.onerror = () => {
         connectionStatus.textContent = '连接错误';
-        connectionStatus.style.color = '#f44336';
+        connectionStatus.className = 'error';
     };
     
     ws.onclose = () => {
         connectionStatus.textContent = '已断开';
-        connectionStatus.style.color = '#999';
+        connectionStatus.className = 'disconnected';
         setTimeout(connectWebSocket, 3000);
     };
 }
@@ -428,6 +641,7 @@ const uploadCloseBtn = document.getElementById('upload-close-btn');
 
 // Floating action buttons container
 const floatingActions = document.createElement('div');
+floatingActions.className = 'floating-actions';
 floatingActions.style.cssText = 'position: fixed; bottom: 20px; left: 20px; display: flex; gap: 10px; align-items: center; z-index: 100; flex-wrap: wrap;';
 
 // Upload button
@@ -442,17 +656,27 @@ uploadFloatingBtn.onclick = function() { uploadWindow.style.display = 'block'; }
 // Lock button
 const lockBtn = document.createElement('button');
 lockBtn.id = 'lockBtn';
-lockBtn.innerHTML = '🔓 设置锁';
+lockBtn.innerHTML = '🔓 加锁';
 lockBtn.className = 'floating-btn';
 lockBtn.style.cssText = 'padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,102,204,0.3); transition: all 0.2s;';
 lockBtn.onmouseover = function() { lockBtn.style.transform = 'translateY(-2px)'; lockBtn.style.boxShadow = '0 4px 12px rgba(0,102,204,0.4)'; };
 lockBtn.onmouseout = function() { lockBtn.style.transform = 'translateY(0)'; lockBtn.style.boxShadow = '0 2px 8px rgba(0,102,204,0.3)'; };
 lockBtn.onclick = function() { toggleLock(); };
 
+// Preview/Edit toggle button (only shown on mobile)
+const previewToggleBtn = document.createElement('button');
+previewToggleBtn.id = 'preview-toggle-btn';
+previewToggleBtn.innerHTML = '👁️ 预览';
+previewToggleBtn.className = 'floating-btn';
+previewToggleBtn.style.cssText = 'padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,102,204,0.3); transition: all 0.2s; display: none;';
+previewToggleBtn.onmouseover = function() { previewToggleBtn.style.transform = 'translateY(-2px)'; previewToggleBtn.style.boxShadow = '0 4px 12px rgba(0,102,204,0.4)'; };
+previewToggleBtn.onmouseout = function() { previewToggleBtn.style.transform = 'translateY(0)'; previewToggleBtn.style.boxShadow = '0 2px 8px rgba(0,102,204,0.3)'; };
+previewToggleBtn.onclick = function() { togglePreview(); };
+
 // New note button
 const newNoteBtn = document.createElement('a');
 newNoteBtn.href = '/';
-newNoteBtn.innerHTML = '📝 新建笔记';
+newNoteBtn.innerHTML = '📝 新建';
 newNoteBtn.className = 'floating-btn';
 newNoteBtn.style.cssText = 'padding: 12px 20px; background: #0066cc; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,102,204,0.3); transition: all 0.2s; text-decoration: none; display: inline-block;';
 newNoteBtn.onmouseover = function() { newNoteBtn.style.transform = 'translateY(-2px)'; newNoteBtn.style.boxShadow = '0 4px 12px rgba(0,102,204,0.4)'; };
@@ -460,6 +684,7 @@ newNoteBtn.onmouseout = function() { newNoteBtn.style.transform = 'translateY(0)
 
 floatingActions.appendChild(uploadFloatingBtn);
 floatingActions.appendChild(lockBtn);
+floatingActions.appendChild(previewToggleBtn);
 floatingActions.appendChild(newNoteBtn);
 document.body.appendChild(floatingActions);
 
@@ -587,6 +812,48 @@ function addTokenToRequest(url, options = {}) {
     return { url, options };
 }
 
+// Toggle preview panel (mobile only)
+function togglePreview() {
+    const editorPanel = document.querySelector('.editor-panel');
+    const previewPanel = document.getElementById('preview-panel');
+    const previewToggleBtn = document.getElementById('preview-toggle-btn');
+    
+    if (previewPanel.classList.contains('show')) {
+        // Hide preview, show editor (currently in preview mode, switch to edit mode)
+        previewPanel.classList.remove('show');
+        editorPanel.classList.remove('hide');
+        if (previewToggleBtn) previewToggleBtn.innerHTML = '👁️ 预览';
+        editor.focus();
+    } else {
+        // Show preview, hide editor (currently in edit mode, switch to preview mode)
+        previewPanel.classList.add('show');
+        editorPanel.classList.add('hide');
+        if (previewToggleBtn) previewToggleBtn.innerHTML = '✏️ 编辑';
+        updatePreview();
+    }
+}
+
+// Show toggle button on mobile
+if (window.innerWidth <= 768) {
+    const previewToggleBtn = document.getElementById('preview-toggle-btn');
+    if (previewToggleBtn) previewToggleBtn.style.display = 'inline-block';
+}
+
+// Update on resize
+window.addEventListener('resize', () => {
+    const previewToggleBtn = document.getElementById('preview-toggle-btn');
+    if (window.innerWidth <= 768) {
+        if (previewToggleBtn) previewToggleBtn.style.display = 'inline-block';
+    } else {
+        if (previewToggleBtn) previewToggleBtn.style.display = 'none';
+        // Show both panels on desktop
+        const previewPanel = document.getElementById('preview-panel');
+        const editorPanel = document.querySelector('.editor-panel');
+        if (previewPanel) previewPanel.classList.add('show');
+        if (editorPanel) editorPanel.classList.remove('hide');
+    }
+});
+
 editor.focus();
 updatePreview();
 connectWebSocket();
@@ -605,7 +872,7 @@ if (rawContent.startsWith('<!-- LOCK:')) {
     if (endIdx !== -1) {
         noteLockToken = rawContent.substring('<!-- LOCK:'.length, endIdx);
         isLocked = true;
-        document.getElementById('lockBtn').textContent = '🔒 移除锁';
+        document.getElementById('lockBtn').textContent = '🔒 解锁';
         document.getElementById('lockBtn').style.background = '#e74c3c';
     }
 }
@@ -698,7 +965,7 @@ function toggleLock() {
                 isLocked = false;
                 noteLockToken = '';
                 if (lockBtn) {
-                    lockBtn.textContent = '🔓 设置锁';
+                    lockBtn.textContent = '🔓 加锁';
                     lockBtn.style.background = '#0066cc';
                 }
                 saveNote();
@@ -720,7 +987,7 @@ function toggleLock() {
             isLocked = true;
             noteLockToken = token.trim();
             if (lockBtn) {
-                lockBtn.textContent = '🔒 移除锁';
+                lockBtn.textContent = '🔒 解锁';
                 lockBtn.style.background = '#e74c3c';
             }
             saveNote();

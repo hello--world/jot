@@ -85,6 +85,11 @@ echo "ADMIN_TOKEN=your-secret-token" > .env
   - 可以只指定端口号（如 `8080`），会自动添加 `:` 前缀
   - 也可以完整指定（如 `:8080` 或 `:3000`）
 
+- `-access-token` / `ACCESS_TOKEN`: 访问令牌（可选）
+  - 如果设置，所有笔记访问都需要提供此令牌（`/read` 路径除外）
+  - 可以通过 URL 参数 `?token=xxx`、Cookie `access_token` 或 `Authorization: Bearer xxx` header 提供
+  - 留空表示无需授权即可访问笔记
+
 - `-admin-path` / `ADMIN_PATH`: 管理后台路径（默认: `/admin`）
 
 - `-note-name-len` / `NOTE_NAME_LEN`: 笔记名称最小长度（默认: `3`）
@@ -127,6 +132,7 @@ ADMIN_TOKEN=your-secret-token
 
 # 可选配置
 PORT=8080
+ACCESS_TOKEN=your-access-token  # 可选，设置后所有笔记访问都需要此令牌（/read 路径除外）
 ADMIN_PATH=/admin
 NOTE_NAME_LEN=3
 BACKUP_DAYS=7
@@ -146,6 +152,7 @@ MAX_NOTE_COUNT=500
 ```json
 {
   "adminToken": "your-secret-token",
+  "accessToken": "your-access-token",
   "adminPath": "/admin",
   "noteNameLen": 3,
   "backupDays": 7,
@@ -188,9 +195,14 @@ export ADMIN_TOKEN=my-token
 ### Web 界面
 
 1. 访问 `http://localhost:8080` 会自动创建随机笔记
+   - 如果设置了访问令牌（access_token），需要先输入令牌才能访问
 2. 访问 `http://localhost:8080/笔记名称` 编辑指定笔记
 3. 访问 `http://localhost:8080/read/笔记名称` 以只读模式查看笔记（不支持编辑）
-4. 访问 `http://localhost:8080/admin?token=your-token` 进入管理后台
+   - `/read` 路径不需要访问令牌，但需要笔记的锁令牌（如果笔记有锁）
+   - 使用 `?raw=1` 参数可以下载原始文件内容（纯文本）
+4. 访问 `http://localhost:8080/admin` 进入管理后台
+   - 首次访问需要输入管理员令牌（admin token）
+   - 登录后使用 session token（HttpOnly cookie），不会暴露在 URL 中
 
 ### 文件上传
 
@@ -204,23 +216,31 @@ export ADMIN_TOKEN=my-token
 ### 命令行
 
 ```bash
-# 创建/更新笔记
-curl http://localhost:8080/abc -d "笔记内容"
+# 创建/更新笔记（如果设置了访问令牌，需要提供 token）
+curl http://localhost:8080/abc -d "笔记内容" -H "Authorization: Bearer your-access-token"
+# 或使用 URL 参数（不推荐，会暴露在日志中）
+curl "http://localhost:8080/abc?token=your-access-token" -d "笔记内容"
 
 # 获取笔记内容
-curl http://localhost:8080/abc
+curl http://localhost:8080/abc -H "Authorization: Bearer your-access-token"
 
 # 获取原始内容（纯文本）
-curl http://localhost:8080/abc?raw
+curl "http://localhost:8080/abc?raw=1" -H "Authorization: Bearer your-access-token"
 
-# 获取 JSON 格式的笔记列表（需要 token）
-curl http://localhost:8080/admin?token=your-token -H "Accept: application/json"
+# 访问只读模式（不需要访问令牌）
+curl http://localhost:8080/read/abc
 
-# 上传文件
-curl -F "file=@image.png" http://localhost:8080/api/upload
+# 下载原始文件内容（纯文本，不需要访问令牌）
+curl "http://localhost:8080/read/abc?raw=1"
 
-# 访问只读模式（浏览器）
-# 打开 http://localhost:8080/read/abc
+# 访问有锁的笔记（需要提供 lock_token）
+curl "http://localhost:8080/read/abc?raw=1&lock_token=your-lock-token"
+
+# 获取 JSON 格式的笔记列表（需要管理员 token）
+curl http://localhost:8080/admin -H "Authorization: Bearer your-admin-token" -H "Accept: application/json"
+
+# 上传文件（如果设置了访问令牌，需要提供 token）
+curl -F "file=@image.png" http://localhost:8080/api/upload -H "Authorization: Bearer your-access-token"
 ```
 
 ## 功能说明
@@ -232,6 +252,13 @@ curl -F "file=@image.png" http://localhost:8080/api/upload
 - **实时预览**: Markdown 内容实时渲染
 - **文件信息**: 顶部显示文件大小、创建时间和修改时间
 - **只读模式**: 通过 `/read/{noteName}` 访问只读模式，适合分享和查看，不支持编辑
+  - `/read` 路径不需要访问令牌（access_token），但需要笔记的锁令牌（如果笔记有锁）
+  - 使用 `?raw=1` 参数可以下载原始文件内容（纯文本，不带锁标记）
+  - 使用 `?raw=1&lock_token=xxx` 可以下载有锁笔记的原始内容（需要正确的锁令牌）
+- **笔记锁**: 可以为笔记设置锁令牌，只有提供正确的锁令牌才能查看或编辑
+  - 在编辑页面点击"设置锁"按钮可以设置锁令牌
+  - 有锁的笔记在访问时需要提供 `lock_token` 参数或通过 Cookie/Authorization header
+  - 下载原始内容时，如果锁令牌正确，会自动去掉锁标记 `<!-- LOCK:token -->`
 - **文件上传**: 支持上传图片和其他文件，图片自动显示，其他文件显示为下载链接
 
 ### 备份功能
@@ -251,11 +278,15 @@ curl -F "file=@image.png" http://localhost:8080/api/upload
 
 ### 管理后台
 
-- Token 认证保护
+- **Session 认证保护**：使用 HttpOnly cookie 存储 session token，不会暴露在 URL 中
+  - 首次访问需要输入管理员令牌（admin token）
+  - 登录后创建 session token，有效期 2 小时
+  - 管理员令牌不会存储到浏览器 localStorage
 - 查看所有活跃笔记和备份笔记
 - 显示笔记统计信息（数量、大小）
 - 支持标签切换查看活跃/备份笔记
 - **动态配置管理**：可以在管理后台修改以下配置项，修改后自动保存到 `config.json`：
+  - 访问令牌（access_token）- 用于控制笔记访问权限
   - 管理后台路径
   - 笔记名称最小长度
   - 备份天数

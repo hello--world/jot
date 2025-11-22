@@ -186,6 +186,98 @@ body {
     font-size: 48px;
     margin-bottom: 16px;
 }
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    .container {
+        border-radius: 8px;
+    }
+    .header {
+        padding: 12px 15px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .header-info {
+        gap: 12px;
+        font-size: 12px;
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    .header-actions {
+        width: 100%;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .btn {
+        padding: 10px 14px;
+        font-size: 13px;
+        flex: 1;
+        min-width: 120px;
+    }
+    .content {
+        padding: 20px 15px;
+    }
+    #preview {
+        font-size: 15px;
+    }
+    #preview h1 {
+        font-size: 1.8em;
+    }
+    #preview h2 {
+        font-size: 1.4em;
+    }
+    #status-message {
+        top: 15px !important;
+        right: 15px !important;
+        left: 15px !important;
+        font-size: 13px !important;
+        padding: 10px 16px !important;
+    }
+}
+@media (max-width: 480px) {
+    body {
+        padding: 8px;
+    }
+    .header {
+        padding: 10px 12px;
+        font-size: 11px;
+    }
+    .header-info {
+        gap: 8px;
+        font-size: 11px;
+    }
+    .header-info-label {
+        display: none; /* 小屏幕隐藏标签 */
+    }
+    .header-actions {
+        gap: 6px;
+    }
+    .btn {
+        padding: 10px 12px;
+        font-size: 12px;
+        min-width: 100px;
+    }
+    .content {
+        padding: 15px 12px;
+    }
+    #preview {
+        font-size: 14px;
+    }
+    #preview h1 {
+        font-size: 1.6em;
+    }
+    #preview h2 {
+        font-size: 1.3em;
+    }
+    #preview pre {
+        padding: 12px;
+        font-size: 13px;
+    }
+    #preview code {
+        font-size: 13px;
+    }
+}
 @media (prefers-color-scheme: dark) {
     body {
         background: #333b4d;

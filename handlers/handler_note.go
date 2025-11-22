@@ -108,18 +108,24 @@ func handleNoteGet(w http.ResponseWriter, r *http.Request, noteName string) {
 	var fileSize int64
 	var modTime time.Time
 	var createTime time.Time
-	notePath := deps.GetNotePath(noteName)
+	notePath, err := deps.FindNotePath(noteName)
 	now := time.Now()
 
-	if info, err := os.Stat(notePath); err == nil {
-		fileSize = info.Size()
-		modTime = info.ModTime()
-		// 尝试获取创建时间（Windows 上可用，其他平台回退到修改时间）
-		if ct, err := deps.GetFileCreationTime(notePath); err == nil {
-			createTime = ct
+	if err == nil {
+		if info, err := os.Stat(notePath); err == nil {
+			fileSize = info.Size()
+			modTime = info.ModTime()
+			// 尝试获取创建时间（Windows 上可用，其他平台回退到修改时间）
+			if ct, err := deps.GetFileCreationTime(notePath); err == nil {
+				createTime = ct
+			} else {
+				// 如果无法获取创建时间，回退到修改时间
+				createTime = modTime
+			}
 		} else {
-			// 如果无法获取创建时间，回退到修改时间
-			createTime = modTime
+			// 文件不存在（新建笔记），使用当前时间
+			modTime = now
+			createTime = now
 		}
 	} else {
 		// 文件不存在（新建笔记），使用当前时间
@@ -212,8 +218,10 @@ func handleNotePost(w http.ResponseWriter, r *http.Request, noteName string) {
 	} else {
 		// Get current note size if it exists
 		var currentNoteSize int64
-		if info, err := os.Stat(deps.GetNotePath(noteName)); err == nil {
-			currentNoteSize = info.Size()
+		if notePath, err := deps.FindNotePath(noteName); err == nil {
+			if info, err := os.Stat(notePath); err == nil {
+				currentNoteSize = info.Size()
+			}
 		}
 		// Calculate new total size
 		newTotalSize := currentTotalSize - currentNoteSize + contentSize
@@ -257,11 +265,15 @@ func HandleReadNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 检查 User-Agent 是否为 curl 或 wget
+	userAgent := strings.ToLower(r.Header.Get("User-Agent"))
+	isCurlOrWget := strings.Contains(userAgent, "curl") || strings.Contains(userAgent, "wget")
+
 	// 检查是否是 raw 请求（下载原始内容）
 	isRawRequest := r.URL.Query().Get("raw") != ""
 
-	// 如果是 raw 请求，直接返回原始文件内容（不带锁标记）
-	if isRawRequest {
+	// 如果是 raw 请求或 User-Agent 是 curl/wget，直接返回原始文件内容（不带锁标记）
+	if isRawRequest || isCurlOrWget {
 		// Check note lock
 		if deps.HasNoteLock(rawContent) {
 			lockToken := deps.GetNoteLockToken(rawContent)
@@ -303,17 +315,19 @@ func HandleReadNote(w http.ResponseWriter, r *http.Request) {
 	var fileSize int64
 	var modTime time.Time
 	var createTime time.Time
-	notePath := deps.GetNotePath(noteName)
+	notePath, err := deps.FindNotePath(noteName)
 
-	if info, err := os.Stat(notePath); err == nil {
-		fileSize = info.Size()
-		modTime = info.ModTime()
-		// 尝试获取创建时间（Windows 上可用，其他平台回退到修改时间）
-		if ct, err := deps.GetFileCreationTime(notePath); err == nil {
-			createTime = ct
-		} else {
-			// 如果无法获取创建时间，回退到修改时间
-			createTime = modTime
+	if err == nil {
+		if info, err := os.Stat(notePath); err == nil {
+			fileSize = info.Size()
+			modTime = info.ModTime()
+			// 尝试获取创建时间（Windows 上可用，其他平台回退到修改时间）
+			if ct, err := deps.GetFileCreationTime(notePath); err == nil {
+				createTime = ct
+			} else {
+				// 如果无法获取创建时间，回退到修改时间
+				createTime = modTime
+			}
 		}
 	}
 
